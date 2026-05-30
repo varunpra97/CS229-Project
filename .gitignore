@@ -39,3 +39,4 @@ wandb/
 
 # Large regenerable sweep artifacts (raw per-run pickles)
 results/runs/
+results/runs_smoke/

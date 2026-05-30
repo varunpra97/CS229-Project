@@ -6,7 +6,10 @@ results/report_<task>.pdf. Accuracy in the summary table is the mean over seeds;
 the geometry plots use one representative seed (the angles are stable across
 seeds, and using one seed keeps the complexity magnitudes correct).
 
-Usage:  python scripts/report_task.py <task>     # e.g. sst2, mnli, qqp, qnli, mrpc, rte
+Usage:  python scripts/report_task.py <task> [runs_dir] [out_pdf]
+          <task>      e.g. sst2, mnli, qqp, qnli, mrpc, rte
+          runs_dir    where the per-run pickles live (default results/runs)
+          out_pdf     output path (default results/report_<task>.pdf)
 """
 
 from __future__ import annotations
@@ -23,10 +26,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 import make_report as MR  # noqa: E402
 
 
-def main(task: str):
-    paths = sorted(glob.glob(os.path.join("results", "runs", f"{task}_*.pkl")))
+def main(task: str, runs_dir: str = os.path.join("results", "runs"), out: str = None):
+    paths = sorted(glob.glob(os.path.join(runs_dir, f"{task}_*.pkl")))
     if not paths:
-        raise SystemExit(f"no runs for task '{task}' in results/runs/")
+        raise SystemExit(f"no runs for task '{task}' in {runs_dir}/")
     runs = []
     for p in paths:
         with open(p, "rb") as f:
@@ -52,7 +55,7 @@ def main(task: str):
 
     acc_str = ", ".join(f"{MR.LABEL[m]} {np.mean(acc_by_method[m])*100:.2f}"
                         f"±{np.std(acc_by_method[m])*100:.2f}%" for m in methods)
-    out = os.path.join("results", f"report_{task}.pdf")
+    out = out or os.path.join("results", f"report_{task}.pdf")
     MR.render_report(res, out,
                      title=f"Directional Updates: {task.upper()}  (seeds {seeds})")
     print(f"[report_task] wrote {out}")
@@ -60,6 +63,8 @@ def main(task: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: python scripts/report_task.py <task>")
-    main(sys.argv[1])
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: python scripts/report_task.py <task> [runs_dir] [out_pdf]")
+    main(sys.argv[1],
+         sys.argv[2] if len(sys.argv) > 2 else os.path.join("results", "runs"),
+         sys.argv[3] if len(sys.argv) > 3 else None)

@@ -5,22 +5,49 @@ each with **LoRA, DoRA, and MAP**, **3 seeds**, on the **full dataset** — spli
 across three GPU VMs (one per teammate, **2 tasks each**). Each machine produces
 the per-task plots for the tasks it ran.
 
+Each machine runs in **two steps**: a cheap **smoke** run that proves the
+pipeline works without burning credits, then the **full** run on the entire
+dataset.
+
+---
+
+## What dataset is used?
+
+**GLUE** (General Language Understanding Evaluation), pulled from the Hugging Face
+Hub as `nyu-mll/glue` in `src/data.py`. Each run fine-tunes RoBERTa-base on one of
+the six tasks below. Training uses the task's `train` split; **accuracy is measured
+on the `validation` split** (GLUE's test labels are private). For MNLI we evaluate
+on `validation_matched`.
+
+| Task  | What it is                    | Train size | Eval (validation) |
+|-------|-------------------------------|-----------:|------------------:|
+| MNLI  | NLI (3-class)                 |   ~393,000 |            ~9,800 |
+| QQP   | duplicate-question detection  |   ~364,000 |           ~40,400 |
+| QNLI  | question/answer entailment    |   ~105,000 |            ~5,500 |
+| SST-2 | sentiment (binary)            |    ~67,000 |               872 |
+| MRPC  | paraphrase detection          |     ~3,700 |               408 |
+| RTE   | textual entailment            |     ~2,500 |               277 |
+
+The smoke step caps **training** to a small slice (default 2,000 examples) so it
+finishes in minutes; the full step uses the entire `train` split.
+
 ---
 
 ## 0. Task assignment (2 tasks per machine)
 
 Tasks are paired big+small so the three machines finish in roughly similar time.
+Each owner runs **smoke first, then full** for their two tasks.
 
-| Machine | Owner       | Tasks            | Command on the VM                     |
-|---------|-------------|------------------|---------------------------------------|
-| **A (Varun)**   | teammate 1  | **MNLI + RTE**   | `bash gcp/run_task.sh mnli rte`       |
-| **B (Soham)**   | teammate 2  | **QQP + MRPC**   | `bash gcp/run_task.sh qqp mrpc`       |
-| **C (Stephen)**   | teammate 3  | **QNLI + SST-2** | `bash gcp/run_task.sh qnli sst2`      |
+| Machine | Owner       | Tasks            | Smoke (step 4a)                    | Full (step 4b)                   |
+|---------|-------------|------------------|------------------------------------|----------------------------------|
+| **A (Varun)**   | teammate 1  | **MNLI + RTE**   | `bash gcp/run_smoke.sh mnli rte`  | `bash gcp/run_full.sh mnli rte`  |
+| **B (Soham)**   | teammate 2  | **QQP + MRPC**   | `bash gcp/run_smoke.sh qqp mrpc`  | `bash gcp/run_full.sh qqp mrpc`  |
+| **C (Stephen)**   | teammate 3  | **QNLI + SST-2** | `bash gcp/run_smoke.sh qnli sst2` | `bash gcp/run_full.sh qnli sst2` |
 
-Each `run_task.sh` call trains `3 methods × 3 seeds = 9 runs per task` on the
-**full** training set, then writes `results/report_<task>.pdf`.
+Each **full** call trains `3 methods × 3 seeds = 9 runs per task` on the entire
+training set, then writes `results/report_<task>.pdf`.
 
-> Want a different split? Any task can run alone, e.g. `bash gcp/run_task.sh qqp`.
+> Want a different split? Any task can run alone, e.g. `bash gcp/run_full.sh qqp`.
 
 ---
 
@@ -94,37 +121,62 @@ bash gcp/setup_vm.sh        # checks the GPU, installs transformers/peft/dataset
 
 ---
 
-## 4. Run your tasks (each teammate)
+## 4a. STEP 1 — smoke run (cheap, do this first)
 
-Run inside **tmux** so the job survives an SSH disconnect:
+Verify the whole pipeline on your GPU **before** spending credits on the full
+data. This caps training to 2,000 examples/task, 1 epoch, 1 seed — a few minutes,
+cents of cost. Run inside **tmux** so it survives an SSH disconnect:
 
 ```bash
-tmux new -s run
+tmux new -s smoke
 cd ~/pacbayes-peft
 
 # Machine A:
-bash gcp/run_task.sh mnli rte
-# Machine B:   bash gcp/run_task.sh qqp mrpc
-# Machine C:   bash gcp/run_task.sh qnli sst2
+bash gcp/run_smoke.sh mnli rte
+# Machine B:   bash gcp/run_smoke.sh qqp mrpc
+# Machine C:   bash gcp/run_smoke.sh qnli sst2
 ```
 
-Detach with `Ctrl-b d`; reattach later with `tmux attach -t run`.
-Watch progress: `tail -f results/sweep.log`.
+Detach with `Ctrl-b d`; reattach with `tmux attach -t smoke`. Watch progress:
+`tail -f results/sweep.log`.
 
-This trains on the **entire dataset** (no subsampling). When it finishes you'll
-have, for each of your tasks:
+Outputs (kept **separate** from the full run so they never collide):
+- `results/report_<task>_smoke.pdf` — the plots, to eyeball that everything works
+- `results/runs_smoke/*.pkl` — raw smoke runs
+
+Accuracies will be low (training is deliberately tiny) — that's expected. You're
+only checking the job runs green and the PDFs render.
+
+---
+
+## 4b. STEP 2 — full run (entire dataset)
+
+Once the smoke PDF looks right, launch the real run on the **entire dataset**
+(3 methods × 3 seeds × 3 epochs per task). This is long (hours — see the cost
+table at the bottom), so use `SHUTDOWN=1` to power the VM off when it finishes:
+
+```bash
+tmux new -s full
+cd ~/pacbayes-peft
+
+# Machine A:
+SHUTDOWN=1 bash gcp/run_full.sh mnli rte
+# Machine B:   SHUTDOWN=1 bash gcp/run_full.sh qqp mrpc
+# Machine C:   SHUTDOWN=1 bash gcp/run_full.sh qnli sst2
+```
+
+When it finishes you'll have, for each of your tasks:
 
 - `results/report_<task>.pdf` — the 4-page directional-update report (the plots)
 - `results/runs/<task>_<method>_seed<n>.pkl` — raw per-run angles/metrics
 
-**Auto power-off when done** (saves credits) — set `SHUTDOWN=1`:
-
-```bash
-SHUTDOWN=1 bash gcp/run_task.sh mnli rte
-```
-
 **Resume:** finished runs are skipped automatically, so if a VM is interrupted
-just re-run the same command — it picks up where it left off.
+just re-run the same `run_full.sh` command — it picks up where it left off.
+
+**Tuning knobs** (env vars on either script): `BATCH=64` (more throughput on
+L4/A100), `SEEDS="0"` (one seed for a 3× cheaper first pass), `EPOCHS=2`,
+`MAX_TRAIN=50000` (cap the giant tasks). Example:
+`BATCH=64 SHUTDOWN=1 bash gcp/run_full.sh qqp`.
 
 ---
 
@@ -197,10 +249,23 @@ QNLI ≈ 105k, SST-2 ≈ 67k, MRPC ≈ 3.7k, RTE ≈ 2.5k. Each task does
 | A100 | a2-highgpu-1g    | ~$3–4             | ~3–5 h                               | ~1.5–2 h                 |
 
 Tips to cut cost/time:
+- **Always smoke-test first** (`gcp/run_smoke.sh`) — it's minutes and cents, and
+  catches setup problems before you commit to the long full run.
 - **Use L4** for MNLI/QQP — best speed-per-dollar here.
-- Increase throughput with a bigger batch: `BATCH=64 bash gcp/run_task.sh ...`
+- Increase throughput with a bigger batch: `BATCH=64 bash gcp/run_full.sh ...`
   (L4/A100 have the memory).
-- **Sanity-check first** with one cheap seed/epoch before the full run:
-  `SEEDS="0" EPOCHS=1 bash gcp/run_task.sh rte` (RTE is tiny, ~minutes).
+- Cheaper first pass: `SEEDS="0" bash gcp/run_full.sh ...` (one seed instead of
+  three), or cap the giant tasks with `MAX_TRAIN=50000`.
 - Always `SHUTDOWN=1` (or delete the VM) so an idle GPU doesn't burn credits
   overnight.
+
+## Script reference
+
+| Script               | What it does                                                        |
+|----------------------|---------------------------------------------------------------------|
+| `gcp/setup_vm.sh`    | Installs deps on the Deep Learning VM, verifies the GPU             |
+| `gcp/run_smoke.sh`   | STEP 1: limited data (2k/task, 1 epoch, 1 seed) → `report_*_smoke.pdf` |
+| `gcp/run_full.sh`    | STEP 2: entire dataset, 3 methods × 3 seeds × 3 epochs → `report_*.pdf` |
+| `gcp/run_task.sh`    | Shared engine the two wrappers call (override via env vars)         |
+| `scripts/report_task.py` | Build the plot PDF for one task from its runs                   |
+| `scripts/aggregate.py`   | Pool all tasks' runs → cross-task P1/P3 report + CSV            |

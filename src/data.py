@@ -24,7 +24,8 @@ def load_glue(task: str, tokenizer, max_len: int = 128, subset: int | None = Non
     if task not in GLUE_TASKS:
         raise ValueError(f"unknown task {task!r}; options: {list(GLUE_TASKS)}")
     s1, s2, num_labels = GLUE_TASKS[task]
-    ds = load_dataset("glue", task)
+    # datasets>=4 dropped script-based repos; canonical GLUE lives at nyu-mll/glue.
+    ds = load_dataset("nyu-mll/glue", task)
 
     def tok(batch):
         args = (batch[s1],) if s2 is None else (batch[s1], batch[s2])

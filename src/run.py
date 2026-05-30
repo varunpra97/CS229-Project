@@ -65,13 +65,17 @@ def merged_weights(peft_model) -> dict[str, np.ndarray]:
 def align_names(base: dict, merged: dict) -> list[tuple[str, str]]:
     """Match base-layer module paths to their merged counterparts by suffix.
 
-    peft path:   roberta...attention.self.query  (with .base_layer in base dict)
-    merged path: roberta...attention.self.query  (plain Linear)
-    We strip a trailing '.base_layer' if present and match on the remainder.
+    peft path:   base_model.model.roberta...attention.self.query  (base dict)
+    merged path: roberta...attention.self.query                   (plain Linear)
+    peft wraps the model under a 'base_model.model.' prefix that merge_and_unload
+    strips, so we drop that prefix (and a trailing '.base_layer' if present)
+    before matching on the remainder.
     """
     pairs = []
     for bname in base:
         key = bname[:-len(".base_layer")] if bname.endswith(".base_layer") else bname
+        if key.startswith("base_model.model."):
+            key = key[len("base_model.model."):]
         if key in merged:
             pairs.append((bname, key))
     return pairs

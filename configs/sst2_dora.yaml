@@ -1,0 +1,17 @@
+# Real run config. Use on Colab (free T4) or GCP after the smoke test passes.
+# Swap method/task via CLI: --method lora  /  --task mrpc
+model_name: roberta-base
+task: sst2
+method: dora
+rank: 8
+seed: 0
+
+# no subset / max_steps -> full task
+epochs: 3
+batch_size: 32
+max_len: 128
+lr: 2.0e-4
+
+kappa: 10.0
+tau: 0.01
+output_dir: out_sst2_dora

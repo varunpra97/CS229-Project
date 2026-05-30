@@ -1,0 +1,17 @@
+# Tiny config to debug the full loop on CPU in a few minutes. NOT for real results.
+model_name: roberta-base
+task: sst2
+method: dora
+rank: 8
+seed: 0
+
+subset: 256        # cap train/eval examples so CPU finishes fast
+max_steps: 20      # just enough steps to exercise the loop
+epochs: 1
+batch_size: 16
+max_len: 64
+lr: 2.0e-4
+
+kappa: 10.0
+tau: 0.01
+output_dir: out_smoke

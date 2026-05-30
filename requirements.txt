@@ -1,0 +1,11 @@
+# Core ML stack. Versions are floors known to support DoRA in peft.
+torch>=2.1
+transformers>=4.40
+peft>=0.11.0          # DoRA support (use_dora=True) lands here
+datasets>=2.19
+evaluate>=0.4
+scikit-learn>=1.3
+scipy>=1.11           # Bessel functions for A_d(kappa)
+numpy>=1.24
+pyyaml>=6.0
+pandas>=2.0

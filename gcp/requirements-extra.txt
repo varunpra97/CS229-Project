@@ -1,0 +1,10 @@
+# Extra deps for the GCP Deep Learning VM (PyTorch image already ships a
+# CUDA-enabled torch + numpy + scipy + scikit-learn, so we do NOT list torch
+# here — installing it from PyPI would clobber the CUDA build with a CPU wheel).
+transformers>=4.40
+peft>=0.11.0          # DoRA support (use_dora=True)
+datasets>=2.19
+evaluate>=0.4
+pyyaml>=6.0
+pandas>=2.0
+matplotlib>=3.7

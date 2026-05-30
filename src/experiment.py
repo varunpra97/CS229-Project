@@ -1,8 +1,8 @@
 """
-Directional-update comparison experiment: LoRA vs DoRA vs MAP on one GLUE task.
+Directional-update sweep: LoRA / DoRA / MAP on the GLUE tasks.
 
-For each method we fine-tune RoBERTa-base on the SAME data subset, then compare
-the pretrained vs fine-tuned weights of the target modules through the paper's
+For each (task, method, seed) we fine-tune RoBERTa-base, then compare the
+pretrained vs fine-tuned weights of the target modules through the paper's
 hyperspherical lens:
 
   * per-column angles      theta_j   = angle(w0_j, what_j)          (DoRA / local view)
@@ -11,21 +11,23 @@ hyperspherical lens:
                            C_MAP  = kappa * (1 - cos Theta_g)
   * effective sparsity     s = |{j : theta_j > tau}|
 
-All three methods are scored with BOTH estimators (the estimators are functions
-of the resulting angles, applied regardless of how the update was produced), so
-we can see how a column-wise update (DoRA) vs a global update (MAP) distribute
-their directional change.
+Each run is saved as its own pickle in `results/runs/{task}_{method}_seed{seed}.pkl`
+so a long sweep is resumable (existing runs are skipped unless --overwrite) and
+`scripts/aggregate.py` can pool everything afterward.
 
-Outputs:
-  results/directional.pkl  -- raw angles + per-layer/per-method metrics (for plots)
-  results/summary.csv      -- one row per (method, layer), human-readable
+Examples
+--------
+  # the full paper protocol (6 tasks x 3 methods x 3 seeds, full data) on a GPU
+  python -m src.experiment --tasks sst2 mrpc rte qnli qqp mnli \
+      --methods lora dora map --seeds 0 1 2 --epochs 3 --batch-size 32
 
-Run:  python -m src.experiment
+  # a fast local check (CPU/MPS): two small tasks, capped train set, one seed
+  python -m src.experiment --tasks rte mrpc --seeds 0 --max-train 500 --epochs 1
 """
 
 from __future__ import annotations
 
-import csv
+import argparse
 import os
 import pickle
 
@@ -39,28 +41,31 @@ from transformers import (
     set_seed,
 )
 
-from .data import load_glue
+from .data import load_glue, GLUE_TASKS
 from .train import build_model, make_metric
 from .map_adapter import build_map_model, map_layer_weights
 from .run import snapshot_base_weights, merged_weights, align_names
 from .angles import column_angles, global_angle
 
-# ----- experiment configuration -------------------------------------------------
-CFG = dict(
-    model_name="roberta-base",
-    task="sst2",
-    methods=["lora", "dora", "map"],
-    rank=8,
-    seed=1,
-    subset=4000,        # train examples (eval uses the full validation split)
-    epochs=3,
-    batch_size=16,
-    max_len=128,
-    lr=2.0e-4,
-    kappa=10.0,
-    tau=0.01,
-)
-RESULTS_DIR = "results"
+ALL_TASKS = ["sst2", "mrpc", "rte", "qnli", "qqp", "mnli"]
+ALL_METHODS = ["lora", "dora", "map"]
+
+# Fixed analysis/model hyperparameters (paper defaults).
+MODEL_NAME = "roberta-base"
+RANK = 8
+LR = 2.0e-4
+KAPPA = 10.0
+TAU = 0.01
+
+
+def device_info():
+    cuda = torch.cuda.is_available()
+    mps = torch.backends.mps.is_available()
+    if cuda:
+        return "cuda", torch.cuda.get_device_name(0)
+    if mps:
+        return "mps", "Apple MPS"
+    return "cpu", "CPU"
 
 
 def layer_type(name: str) -> str:
@@ -76,7 +81,6 @@ def extract_layers(model, method: str) -> dict[str, tuple]:
     """Return {layer_name: (W0, W_final)} for the target modules of `model`."""
     if method == "map":
         return map_layer_weights(model)
-    # peft (lora / dora): read frozen base weights and the merged adapter weights.
     base = snapshot_base_weights(model)
     merged = merged_weights(model)
     pairs = align_names(base, merged)
@@ -85,48 +89,15 @@ def extract_layers(model, method: str) -> dict[str, tuple]:
 
 def build(method: str, num_labels: int):
     if method == "map":
-        return build_map_model(CFG["model_name"], num_labels, rank=CFG["rank"])
-    return build_model(CFG["model_name"], num_labels, method, CFG["rank"])
+        return build_map_model(MODEL_NAME, num_labels, rank=RANK)
+    return build_model(MODEL_NAME, num_labels, method, RANK)
 
 
-def train_method(method: str, tok, train_ds, eval_ds, num_labels: int):
-    """Fine-tune one method on the shared datasets; return (model, eval_metrics)."""
-    set_seed(CFG["seed"])
-    model = build(method, num_labels)
-    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    args = TrainingArguments(
-        output_dir=os.path.join("out_exp", method),
-        per_device_train_batch_size=CFG["batch_size"],
-        per_device_eval_batch_size=CFG["batch_size"],
-        learning_rate=CFG["lr"],
-        num_train_epochs=CFG["epochs"],
-        lr_scheduler_type="cosine",
-        seed=CFG["seed"],
-        logging_steps=50,
-        report_to="none",
-        save_strategy="no",
-    )
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        data_collator=DataCollatorWithPadding(tok),
-        compute_metrics=make_metric(CFG["task"]),
-    )
-    trainer.train()
-    metrics = trainer.evaluate()
-    metrics["trainable_params"] = n_train
-    return model, metrics
-
-
-def analyze(model, method: str) -> dict:
+def analyze(model, method: str, kappa: float, tau: float) -> dict:
     """Compute per-layer angles and complexity terms for a trained model."""
-    kappa, tau = CFG["kappa"], CFG["tau"]
     layers = {}
     for name, (W0, Wf) in extract_layers(model, method).items():
-        thetas = column_angles(W0, Wf)            # (d_in,)
+        thetas = column_angles(W0, Wf)
         tg = global_angle(W0, Wf)
         d_in = int(W0.shape[1])
         layers[name] = dict(
@@ -135,79 +106,117 @@ def analyze(model, method: str) -> dict:
             layer_type=layer_type(name),
             d=d_in,
             s=int(np.sum(thetas > tau)),
-            c_dora=float(kappa * np.sum(1.0 - np.cos(thetas))),   # local sum
-            c_map=float(kappa * (1.0 - np.cos(tg))),              # global single
+            c_dora=float(kappa * np.sum(1.0 - np.cos(thetas))),
+            c_map=float(kappa * (1.0 - np.cos(tg))),
         )
     return layers
 
 
-def main():
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    print(f"[exp] device mps={torch.backends.mps.is_available()} | "
-          f"task={CFG['task']} subset={CFG['subset']} methods={CFG['methods']}")
+def train_one_run(task, method, seed, tok, train_ds, eval_ds, num_labels, args, dev):
+    """Fine-tune one (task, method, seed); return a result dict."""
+    set_seed(seed)
+    model = build(method, num_labels)
+    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    tok = AutoTokenizer.from_pretrained(CFG["model_name"])
-    train_ds, eval_ds, num_labels = load_glue(
-        CFG["task"], tok, max_len=CFG["max_len"], subset=CFG["subset"]
+    targs = TrainingArguments(
+        output_dir=os.path.join("out_exp", f"{task}_{method}_{seed}"),
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=max(args.batch_size, 64),
+        learning_rate=LR,
+        num_train_epochs=args.epochs,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.06,
+        weight_decay=0.0,
+        seed=seed,
+        logging_steps=50,
+        report_to="none",
+        save_strategy="no",
+        fp16=(dev == "cuda"),                 # mixed precision only on CUDA
+        dataloader_num_workers=args.num_workers,
     )
-    # Same eval set is the full validation split (load_glue caps it by subset);
-    # reload eval at full size so accuracy is comparable to the paper.
-    _, eval_full, _ = load_glue(CFG["task"], tok, max_len=CFG["max_len"], subset=None)
-    print(f"[exp] train={len(train_ds)} eval={len(eval_full)} examples")
+    trainer = Trainer(
+        model=model,
+        args=targs,
+        train_dataset=train_ds,
+        eval_dataset=eval_ds,
+        data_collator=DataCollatorWithPadding(tok),
+        compute_metrics=make_metric(task),
+    )
+    trainer.train()
+    metrics = trainer.evaluate()
+    acc = metrics.get("eval_accuracy", float("nan"))
+    layers = analyze(model, method, args.kappa, args.tau)
+    res = dict(task=task, method=method, seed=seed, accuracy=acc,
+               trainable_params=n_train, layers=layers,
+               cfg=dict(model_name=MODEL_NAME, rank=RANK, epochs=args.epochs,
+                        lr=LR, kappa=args.kappa, tau=args.tau,
+                        max_train=args.max_train, max_len=args.max_len))
+    del model, trainer
+    if dev == "cuda":
+        torch.cuda.empty_cache()
+    elif dev == "mps":
+        torch.mps.empty_cache()
+    return res
 
-    results = {"cfg": CFG, "methods": {}}
-    for method in CFG["methods"]:
-        print(f"\n[exp] ===== fine-tuning {method.upper()} =====")
-        model, metrics = train_method(method, tok, train_ds, eval_full, num_labels)
-        acc = metrics.get("eval_accuracy", float("nan"))
-        print(f"[exp] {method}: eval_accuracy={acc:.4f} "
-              f"trainable={metrics['trainable_params']:,}")
-        layers = analyze(model, method)
-        results["methods"][method] = dict(
-            accuracy=acc,
-            trainable_params=metrics["trainable_params"],
-            layers=layers,
-        )
-        del model
-        if torch.backends.mps.is_available():
-            torch.mps.empty_cache()
 
-    # ----- persist raw results for plotting -------------------------------------
-    with open(os.path.join(RESULTS_DIR, "directional.pkl"), "wb") as f:
-        pickle.dump(results, f)
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--tasks", nargs="+", default=["sst2"], choices=ALL_TASKS)
+    ap.add_argument("--methods", nargs="+", default=ALL_METHODS, choices=ALL_METHODS)
+    ap.add_argument("--seeds", nargs="+", type=int, default=[0])
+    ap.add_argument("--epochs", type=float, default=3.0)
+    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--max-len", type=int, default=128)
+    ap.add_argument("--max-train", type=int, default=None,
+                    help="cap train examples per task (default: full data)")
+    ap.add_argument("--kappa", type=float, default=KAPPA)
+    ap.add_argument("--tau", type=float, default=TAU)
+    ap.add_argument("--num-workers", type=int, default=2)
+    ap.add_argument("--out-dir", default=os.path.join("results", "runs"))
+    ap.add_argument("--overwrite", action="store_true",
+                    help="re-run and overwrite runs that already have a pickle")
+    args = ap.parse_args()
 
-    # ----- human-readable summary CSV -------------------------------------------
-    csv_path = os.path.join(RESULTS_DIR, "summary.csv")
-    fields = ["method", "layer", "layer_type", "accuracy", "d", "s", "s_over_d",
-              "theta_mean", "theta_var", "theta_max", "theta_global",
-              "c_dora", "c_map"]
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        for method, mres in results["methods"].items():
-            for name, L in mres["layers"].items():
-                th = L["theta"]
-                w.writerow(dict(
-                    method=method, layer=name, layer_type=L["layer_type"],
-                    accuracy=mres["accuracy"], d=L["d"], s=L["s"],
-                    s_over_d=L["s"] / L["d"],
-                    theta_mean=float(np.mean(th)), theta_var=float(np.var(th)),
-                    theta_max=float(np.max(th)), theta_global=L["theta_global"],
-                    c_dora=L["c_dora"], c_map=L["c_map"],
-                ))
-    print(f"\n[exp] wrote {os.path.join(RESULTS_DIR, 'directional.pkl')} and {csv_path}")
+    dev, dev_name = device_info()
+    os.makedirs(args.out_dir, exist_ok=True)
+    total = len(args.tasks) * len(args.methods) * len(args.seeds)
+    print(f"[exp] device={dev} ({dev_name}) | fp16={dev=='cuda'} | "
+          f"{len(args.tasks)} tasks x {len(args.methods)} methods x "
+          f"{len(args.seeds)} seeds = {total} runs")
+    print(f"[exp] tasks={args.tasks} methods={args.methods} seeds={args.seeds} "
+          f"epochs={args.epochs} batch={args.batch_size} "
+          f"max_train={args.max_train or 'full'}")
 
-    # ----- compact metric table to stdout ---------------------------------------
-    print("\n[exp] ===== SUMMARY =====")
-    print(f"{'method':>6} {'acc':>7} {'trainable':>11} {'C_DoRA(sum)':>12} "
-          f"{'C_MAP(glob)':>12} {'mean s/d':>9}")
-    for method, mres in results["methods"].items():
-        Ls = mres["layers"].values()
-        c_dora = sum(L["c_dora"] for L in Ls)
-        c_map = sum(L["c_map"] for L in Ls)
-        sd = np.mean([L["s"] / L["d"] for L in Ls])
-        print(f"{method:>6} {mres['accuracy']:>7.4f} {mres['trainable_params']:>11,} "
-              f"{c_dora:>12.3f} {c_map:>12.4f} {sd:>9.3f}")
+    tok = AutoTokenizer.from_pretrained(MODEL_NAME)
+    done = 0
+    for task in args.tasks:
+        # Load this task's data once; share the train/eval sets across methods/seeds.
+        train_full, eval_ds, num_labels = load_glue(task, tok, max_len=args.max_len)
+        train_ds = train_full
+        if args.max_train is not None and args.max_train < len(train_full):
+            train_ds = train_full.select(range(args.max_train))
+        print(f"\n[exp] === task={task} | train={len(train_ds)} eval={len(eval_ds)} "
+              f"num_labels={num_labels} ===")
+
+        for seed in args.seeds:
+            for method in args.methods:
+                done += 1
+                out = os.path.join(args.out_dir, f"{task}_{method}_seed{seed}.pkl")
+                tag = f"[{done}/{total}] {task}/{method}/seed{seed}"
+                if os.path.exists(out) and not args.overwrite:
+                    print(f"[exp] {tag}: SKIP (exists)")
+                    continue
+                print(f"[exp] {tag}: training ...")
+                res = train_one_run(task, method, seed, tok, train_ds, eval_ds,
+                                    num_labels, args, dev)
+                with open(out, "wb") as f:
+                    pickle.dump(res, f)
+                print(f"[exp] {tag}: acc={res['accuracy']:.4f} "
+                      f"trainable={res['trainable_params']:,} -> {out}")
+
+    print(f"\n[exp] sweep complete: {total} runs in {args.out_dir}")
+    print("[exp] next: python scripts/aggregate.py")
 
 
 if __name__ == "__main__":

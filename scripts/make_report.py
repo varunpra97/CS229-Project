@@ -29,9 +29,20 @@ COLORS = {"lora": "#4C72B0", "dora": "#DD8452", "map": "#55A868"}
 LABEL = {"lora": "LoRA", "dora": "DoRA", "map": "MAP"}
 
 
-def load():
-    with open(PKL, "rb") as f:
+def load(path=PKL):
+    with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def render_report(res, pdf_path, title="Directional Updates: LoRA vs DoRA vs MAP"):
+    """Write the 4-page directional report for one task's `res` dict to pdf_path."""
+    with PdfPages(pdf_path) as pdf:
+        page_summary(pdf, res)
+        page_distributions(pdf, res)
+        page_sparsity(pdf, res)
+        page_layers(pdf, res)
+        pdf.infodict()["Title"] = title
+    return pdf_path
 
 
 def methods_in(res):
@@ -257,19 +268,14 @@ def page_layers(pdf, res):
     pdf.savefig(fig); plt.close(fig)
 
 
-def main():
-    if not os.path.exists(PKL):
-        raise SystemExit(f"missing {PKL}; run `python -m src.experiment` first")
-    res = load()
-    with PdfPages(PDF) as pdf:
-        page_summary(pdf, res)
-        page_distributions(pdf, res)
-        page_sparsity(pdf, res)
-        page_layers(pdf, res)
-        d = pdf.infodict()
-        d["Title"] = "Directional Updates: LoRA vs DoRA vs MAP"
-    print(f"[report] wrote {PDF} ({os.path.getsize(PDF)//1024} KB)")
+def main(pkl=PKL, pdf=PDF):
+    if not os.path.exists(pkl):
+        raise SystemExit(f"missing {pkl}; run `python -m src.experiment` first")
+    render_report(load(pkl), pdf)
+    print(f"[report] wrote {pdf} ({os.path.getsize(pdf)//1024} KB)")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(sys.argv[1] if len(sys.argv) > 1 else PKL,
+         sys.argv[2] if len(sys.argv) > 2 else PDF)

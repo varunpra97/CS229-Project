@@ -33,3 +33,9 @@ wandb/
 *.swp
 .idea/
 .vscode/
+
+# Claude Code local state
+.claude/
+
+# Large regenerable sweep artifacts (raw per-run pickles)
+results/runs/

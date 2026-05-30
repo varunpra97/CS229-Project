@@ -13,9 +13,9 @@ Tasks are paired big+small so the three machines finish in roughly similar time.
 
 | Machine | Owner       | Tasks            | Command on the VM                     |
 |---------|-------------|------------------|---------------------------------------|
-| **A**   | teammate 1  | **MNLI + RTE**   | `bash gcp/run_task.sh mnli rte`       |
-| **B**   | teammate 2  | **QQP + MRPC**   | `bash gcp/run_task.sh qqp mrpc`       |
-| **C**   | teammate 3  | **QNLI + SST-2** | `bash gcp/run_task.sh qnli sst2`      |
+| **A (Varun)**   | teammate 1  | **MNLI + RTE**   | `bash gcp/run_task.sh mnli rte`       |
+| **B (Soham)**   | teammate 2  | **QQP + MRPC**   | `bash gcp/run_task.sh qqp mrpc`       |
+| **C (Stephen)**   | teammate 3  | **QNLI + SST-2** | `bash gcp/run_task.sh qnli sst2`      |
 
 Each `run_task.sh` call trains `3 methods × 3 seeds = 9 runs per task` on the
 **full** training set, then writes `results/report_<task>.pdf`.

@@ -62,10 +62,10 @@ gcloud config set project YOUR_PROJECT_ID          # the project with your credi
 gcloud services enable compute.googleapis.com
 ```
 
-**GPU quota:** new projects often have 0 GPU quota. Request at least 1 of your
-chosen GPU in your zone at
-`IAM & Admin → Quotas` (filter "GPUs (all regions)" and the specific
-"NVIDIA T4 GPUs"). Approval is usually quick.
+**GPU quota:** new projects ship with **0 GPU quota**, so the VM create will
+fail until you raise it. This is the most common blocker — see the detailed
+walkthrough in step 2 below (you must raise **both** the global *and* the
+regional quota, and billing must be enabled first).
 
 ---
 
@@ -74,31 +74,102 @@ chosen GPU in your zone at
 We use Google's **Deep Learning VM** (PyTorch image) — CUDA + a GPU build of
 PyTorch are preinstalled, so there are no driver headaches.
 
+> **⚠️ Prerequisite: request GPU quota first.** New GCP projects ship with a
+> **global GPU quota of 0** (`GPUS_ALL_REGIONS = 0`), so the create command will
+> fail with `Quota 'GPUS_ALL_REGIONS' exceeded. Limit: 0.0 globally` no matter
+> which zone or GPU you pick. Walk through these in order:
+>
+> **1. Confirm billing is enabled** (GPU quota requests on free-trial accounts
+> are usually rejected):
+>
+> ```bash
+> PROJECT=$(gcloud config get-value project)
+> gcloud billing projects describe "$PROJECT" \
+>   --format="value(billingEnabled, billingAccountName)"   # want: True  billingAccounts/XXXX
+> ```
+>
+> (If `gcloud billing` says the component isn't installed, run
+> `gcloud components install beta` or just check billing in the Console.)
+>
+> **2. Raise both quotas** on the quotas page —
+> `https://console.cloud.google.com/iam-admin/quotas?project=<YOUR_PROJECT>`:
+>
+> - **`GPUs (all regions)`** (`compute.googleapis.com/gpus_all_regions`) → **1** — this is the global cap that defaults to 0.
+> - the **per-GPU regional** quota in the region you'll use — **`NVIDIA L4 GPUs`** (or `NVIDIA T4 GPUs`) in e.g. `us-east1` → **1**.
+>
+> **Both the global *and* the regional quota must be ≥ 1**, or the create still
+> fails. Submit with a short justification (e.g. *"ML coursework — single GPU
+> for fine-tuning"*); approval is often automatic within minutes but can take up
+> to ~2 business days. You'll get an email when it's granted.
+>
+> **3. Verify the increase landed** before retrying — the global limit should
+> read `1.0`:
+>
+> ```bash
+> gcloud compute project-info describe --flatten="quotas[]" \
+>   --format="value(quotas.metric, quotas.limit)" | grep -i gpus_all_regions
+> ```
+
+> **Pick a current PyTorch image family.** Google retired the old
+> `pytorch-latest-gpu` family; the published families are now versioned. List
+> what's available before creating the VM and use one of the names it prints:
+>
+> ```bash
+> gcloud compute images list --project deeplearning-platform-release \
+>   --filter="family~pytorch" --format="value(family)" | sort -u
+> ```
+>
+> The commands below use `pytorch-2-9-cu129-ubuntu-2204-nvidia-580`, which was
+> current as of this writing — substitute whatever the list command shows.
+
 ```bash
 # --- pick your names/zone ---
 export VM=peft-gpu               # any name
 export ZONE=us-central1-a        # a zone with T4 capacity
 
-# T4 (16 GB, cheapest). Good default.
+# T4 (16 GB, cheapest) — good default.
 gcloud compute instances create "$VM" \
   --zone="$ZONE" \
   --machine-type=n1-standard-8 \
   --accelerator=type=nvidia-tesla-t4,count=1 \
   --maintenance-policy=TERMINATE \
-  --image-family=pytorch-latest-gpu \
+  --image-family=pytorch-2-9-cu129-ubuntu-2204-nvidia-580 \
   --image-project=deeplearning-platform-release \
-  --boot-disk-size=150GB \
+  --boot-disk-size=200GB \
   --metadata="install-nvidia-driver=True"
 ```
 
-**Faster option (recommended for MNLI/QQP):** swap the machine line for an **L4**
-(24 GB, ~2× faster than T4) — L4 is built into `g2` machine types, so drop the
-`--accelerator` line:
+> **zsh tip:** if you paste comment lines and see `zsh: no matches found: ...`,
+> run `setopt interactive_comments` once (zsh doesn't treat `#` as a comment
+> interactively by default). The error is harmless — it just skips the comment.
+
+**Faster option (recommended for MNLI/QQP, and often more available than T4):**
+use an **L4** (24 GB, ~2× faster than T4). L4 is built into `g2` machine types,
+so there's **no `--accelerator` line** — just use `g2-standard-8`:
 
 ```bash
+export VM=peft-gpu
+export ZONE=us-east1-d        # a zone where you hold L4 quota; us-east1-c has had L4 capacity
+                             # (note the hyphen: us-east1-c, not us-east1c)
+
+gcloud compute instances create "$VM" \
+  --zone="$ZONE" \
   --machine-type=g2-standard-8 \
-  # (remove the --accelerator=... line; keep everything else)
+  --maintenance-policy=TERMINATE \
+  --image-family=pytorch-2-9-cu129-ubuntu-2204-nvidia-580 \
+  --image-project=deeplearning-platform-release \
+  --boot-disk-size=200GB \
+  --metadata="install-nvidia-driver=True"
 ```
+
+> **`ZONE_RESOURCE_POOL_EXHAUSTED` / `..._WITH_DETAILS`?** That zone is
+> temporarily out of the GPU you asked for — a transient capacity issue, not a
+> config error. The error usually **names other zones that currently have
+> capacity** (`zonesAvailable: us-east1-c,us-east1-b`) — just set `ZONE` to one
+> of those and re-run. T4 and L4 are offered in most `us-central1`, `us-east1`,
+> `us-east4`, `us-west1`, and `us-west4` zones. **Use a zone name with the
+> hyphen** (`us-east1-c`), not `us-east1c` — the latter gives a misleading
+> `Permission denied on 'locations/...' (or it may not exist)` error.
 
 The first boot installs the NVIDIA driver (a few minutes). SSH in:
 

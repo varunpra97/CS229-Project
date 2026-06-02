@@ -40,3 +40,7 @@ wandb/
 # Large regenerable sweep artifacts (raw per-run pickles)
 results/runs/
 results/runs_smoke/
+
+# Local watcher state + laptop-side working copies of sweep outputs
+gcp-results/
+gcp/.watch_*.sh

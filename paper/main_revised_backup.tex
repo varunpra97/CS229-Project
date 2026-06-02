@@ -1,0 +1,1409 @@
+%% ============================================================
+%% PAC-Bayesian Generalization Bounds for Weight-Decomposed
+%% Low-Rank Adaptation
+%% CS 229 Project — Revised & Expanded Draft
+%%
+%% EDITORIAL NOTES are marked with   %% [EDITORIAL]: ...
+%% TODO placeholders are marked with  %% [TODO]: ...
+%% ============================================================
+
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathtools}          % for \coloneqq
+%\usepackage{bbm}                % for \mathbbm{1} (install texlive-fonts-extra if needed)
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+
+%% ------ theorem environments --------------------------------
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{assumption}[theorem]{Assumption}
+
+\crefname{lemma}{lemma}{lemmas}
+\Crefname{lemma}{Lemma}{Lemmas}
+
+%% ------ editorial / todo box --------------------------------
+\newcommand{\editorial}[1]{%
+  \begin{tcolorbox}[colback=yellow!10, colframe=orange!60, title=\textbf{Editorial Note}]
+    #1
+  \end{tcolorbox}}
+\newcommand{\todosec}[1]{%
+  \begin{tcolorbox}[colback=blue!5, colframe=blue!50, title=\textbf{TODO}]
+    #1
+  \end{tcolorbox}}
+
+%% ------ notation shorthands ---------------------------------
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\vMF}{\mathrm{vMF}}
+\newcommand{\Ad}{A_d}
+\newcommand{\Ak}{A_k}
+\newcommand{\Rhat}{\hat{R}}
+\newcommand{\Rhatl}{\hat{R}_\lambda}
+\newcommand{\RQ}{R(Q)}
+\newcommand{\RQhat}{\hat{R}(Q)}
+\newcommand{\Sd}{\mathbb{S}^{d-1}}
+\newcommand{\Sk}{\mathbb{S}^{k-1}}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\phikl}{\phi_\lambda}
+
+\title{\textbf{PAC-Bayesian Generalization Bounds for\\
+Weight-Decomposed Low-Rank Adaptation}}
+\author{Stephen Zhang}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+\begin{abstract}
+Parameter-efficient fine-tuning (PEFT) methods are rising in popularity as foundation models increase in size. One paradigm of PEFT is weight decomposition, in which methods decompose neural network weight updates into direction and magnitude components. DoRA~\cite{liu2024dora} and MAP~\cite{si2025map} are representative methods of the weight decomposition paradigm, yet their generalization behavior remains poorly understood. We use PAC-Bayes to derive generalization bounds that explicitly capture the geometric structure of direction and magnitude updates for weight decomposition PEFT.
+
+Our analysis develops non-asymptotic KL bounds for von Mises–Fisher (vMF) distributions that remain valid outside the high-concentration regime, yielding closed-form complexity terms expressed through angular deviations on the hypersphere. From these we derive a data-dependent Gibbs posterior whose minimizer is a principled training objective, showing how PAC-Bayes gives rise to cosine-based regularization.
+
+We establish a comparison theorem showing that column-wise methods
+such as DoRA distribute directional complexity across local angles, while
+global methods such as MAP concentrate directional complexity into a single rotation. From the comparison, we theorize DoRA achieves strictly tighter generalization bounds under local sparse updates, whereas MAP is
+better under globally aligned updates.
+
+We formalize four testable predictions from the theory and fine-tuning RoBERTa-base across six GLUE tasks under DoRA, MAP, and LoRA to validate them in
+future work. We present our findings at the bottom of the paper. 
+\end{abstract}
+
+% ============================================================
+\section{Introduction}
+
+Large foundation models are often adapted to downstream tasks using
+parameter-efficient fine-tuning (PEFT) methods, which modify only a small
+subset of parameters while preserving most of the pretrained weights.
+Among these approaches, recent methods such as DoRA~\cite{liu2024dora} and
+MAP~\cite{si2025map} adopt a \emph{weight-decomposition} perspective,
+representing parameters in terms of their magnitudes and directions.
+Despite the empirical success of these methods, their generalization properties remain poorly understood.
+
+A key challenge lies in understanding how different parameterizations affect
+the complexity of adaptation.
+DoRA performs \emph{column-wise} updates, allowing each column of a weight
+matrix to rotate independently.
+MAP applies a \emph{global} transformation that treats the
+entire flattened weight matrix as a single vector and rotates it as a whole.
+While these approaches differ geometrically, there is currently no
+theoretical framework that explains when or why one should generalize better than
+the other.
+
+\begin{sloppypar}
+We address this gap through a PAC-Bayesian analysis of weight-decomposed adaptation.
+Our approach models directional updates using von Mises-Fisher (vMF) distributions on the hypersphere and derives generalization bounds that depend explicitly on angular deviations between pretrained and fine-tuned parameters.
+This leads to a notion of \emph{directional complexity}, measured by cosine-based penalties that arise directly from KL divergence terms.
+\end{sloppypar}
+
+%% [EDITORIAL]: Add 1--2 sentences here motivating \emph{why} vMF is the
+%% right choice for directional priors.  A useful angle: vMF is the
+%% maximum-entropy distribution on $\mathbb{S}^{d-1}$ subject to a fixed
+%% mean direction, analogous to the Gaussian being maximum-entropy on
+%% $\mathbb{R}^d$ with fixed mean.  This justifies the choice
+%% information-theoretically rather than by convenience.
+
+Our analysis yields several key insights.
+First, we derive non-asymptotic KL bounds for vMF distributions
+(\cref{thm:pac_dora,thm:pac_map}), enabling rigorous treatment of
+directional uncertainty without relying on high-concentration
+approximations.
+Second, we introduce a data-dependent Gibbs posterior
+(\cref{sec:gibbs}) that yields a principled training objective,
+connecting PAC-Bayes theory to commonly used regularization schemes.
+Third, we establish a comparison theorem (\cref{thm:comparison})
+showing that column-wise (local) methods distribute angular
+changes across many coordinates, while global methods compress them
+into a single rotation.
+
+Our results lead to a sharp characterization of when each method is
+preferable.
+We show that DoRA achieves strictly tighter generalization bounds in regimes
+where updates are sparse and localized (\cref{thm:dora_advantage,rem:comparison}),
+whereas MAP is favored when updates are globally aligned.
+Through our work, we provide the first theoretical explanation for empirical phenomena
+observed across PEFT methods.
+
+Finally, we empirically validate our theory by measuring PAC-Bayes
+complexity in practical fine-tuning settings (\cref{sec:experiments}).
+We show that angular complexity strongly correlates with generalization
+performance and that the predicted regimes---sparse versus dense
+updates---align with observed performance differences.
+
+
+%% [TODO]: Add a ``Related Work'' section (see below) before the
+%% technical sections; reviewers will expect it.
+
+% ============================================================
+\section{Background and Related Work}
+
+\subsection{Parameter-Efficient Fine-Tuning}
+Low-Rank Adaptation (LoRA) [3] restricts weight updates to $\Delta W = BA$ via low-rank matrices $B \in \mathbb{R}^{d \times r}$ and $A \in \mathbb{R}^{r \times d}$ ($r \ll d$). Recent approaches enhance this by decoupling magnitude and direction. DoRA [1] factors weight columns as $w_j = m_j u_j$, applying LoRA to the unit-norm direction $u_j \in \mathbb{S}^{d-1}$ while directly training the scalar magnitude $m_j \in \mathbb{R}_+$. Conversely, MAP [2] flattens the entire weight matrix $W \in \mathbb{R}^{d \times d}$ into $w \in \mathbb{R}^{d^2}$, learning global scalars $\alpha, \beta \in \mathbb{R}$ to interpolate between unit-norm vectors via $w' = \alpha \hat{w} + \beta \Delta \hat{w}$.
+
+\subsection{PAC-Bayesian Generalization Theory}
+PAC-Bayes bounds [4, 5] provide high-probability generalization guarantees for randomized predictors, driven primarily by the KL divergence $\text{KL}(Q\|P)$ between a learned posterior $Q$ and a data-free prior $P$. While existing literature readily applies PAC-Bayes to standard fine-tuning [6, 7], no prior work analyzes weight-decomposed adaptation.
+
+\subsection{Distributions on Hyperspheres}
+The von Mises-Fisher distribution $\text{vMF}(\mu, \kappa)$ on $\mathbb{S}^{d-1}$ is defined by the density:
+\[
+p(x \mid \mu, \kappa) = C_d(\kappa) \exp(\kappa \mu^\top x), \quad C_d(\kappa) = \frac{\kappa^{d/2-1}}{(2\pi)^{d/2} I_{d/2-1}(\kappa)},
+\]
+where $I_\nu$ is the modified Bessel function of the first kind. The concentration parameter $\kappa$ controls the distribution, spanning from uniform ($\kappa = 0$) to a point mass at the mean direction $\mu$ ($\kappa \to \infty$). The mean resultant length, $A_d(\kappa) = I_{d/2}(\kappa) / I_{d/2-1}(\kappa) \in [0, 1)$, increases monotonically with $\kappa$.
+
+%% [EDITORIAL]: Originality assessment (see end-of-paper notes).
+%% The key gap you are filling is: (1) vMF-based PAC-Bayes with
+%% non-asymptotic KL, (2) a geometric comparison between column-wise vs.\
+%% global decomposition, and (3) the Gibbs objective interpretation of
+%% cosine regularization.  None of these appear in existing literature.
+
+% ============================================================
+\section{PAC-Bayesian Analysis of Weight-Decomposed Adaptation}
+\label{sec:pac_analysis}
+
+\subsection{Setup and McAllester's Bound}
+\label{sec:setup}
+
+Let $\mathcal{H}$ be a hypothesis space and $\mathcal{D}$ be a data
+distribution over $\mathcal{Z}$.
+Let $P$ be a prior over $\mathcal{H}$ chosen independently of the data,
+and $Q$ a posterior learned from a sample $S = \{z_1, \ldots, z_n\} \sim
+\mathcal{D}^n$.
+Assume the loss $\ell : \mathcal{H} \times \mathcal{Z} \to [0,1]$.
+Define the population and empirical risks:
+\[
+  R(Q) \coloneqq \E_{h \sim Q}\E_{z \sim \mathcal{D}}[\ell(h,z)],
+  \qquad
+  \hat{R}(Q) \coloneqq \E_{h \sim Q}\frac{1}{n}\sum_{i=1}^n \ell(h, z_i).
+\]
+
+\begin{theorem}[McAllester \cite{mcallester1999pac}]
+\label{thm:mcallester}
+For any $\delta \in (0,1)$, with probability at least $1-\delta$ over the
+draw of $S$, for all posteriors $Q$:
+\[
+  R(Q) \leq \hat{R}(Q) + \sqrt{\frac{\KL(Q \| P) + \ln\frac{2\sqrt{n}}{\delta}}{2n}}.
+\]
+\end{theorem}
+\noindent The problem of bounding $R(Q)$ reduces to bounding $\KL(Q \| P)$
+under DoRA and MAP.
+
+% ---------------------------------------------------------------
+\subsection{Non-Asymptotic KL Bounds for vMF Distributions}
+\label{sec:nonasymptotic}
+
+We drop the high-concentration assumption and work with exact,
+non-asymptotic bounds. Lemmas 3.2 and 3.3 are well known.
+
+\begin{lemma}[vMF KL Divergence with Equal Concentration]
+\label{lem:vmf_kl}
+Let $Q_1 = \vMF(\mu_1, \kappa)$ and $Q_0 = \vMF(\mu_0, \kappa)$ be
+distributions on $\Sd$ with the same concentration $\kappa > 0$.
+Then:
+\[
+  \KL(Q_1 \| Q_0) = \kappa \Ad(\kappa)\,(1 - \mu_1^\top \mu_0),
+\]
+where $\Ad(\kappa) = I_{d/2}(\kappa) / I_{d/2-1}(\kappa)$.
+\end{lemma}
+
+\begin{lemma}[Uniform Bounds on $\Ad(\kappa)$]
+\label{lem:ad_bounds}
+For all $\kappa > 0$ and $d \geq 2$:
+\[
+  \frac{\kappa}{d + \kappa} \leq \Ad(\kappa) \leq 1.
+\]
+\end{lemma}
+
+\begin{theorem}[Non-Asymptotic Directional KL Bound]
+\label{thm:nonasymptotic}
+Under the column-wise decomposition of DoRA with per-column vMF priors
+of concentration $\kappa$:
+\[
+  \frac{\kappa^2}{d+\kappa} \sum_{j=1}^d (1 - \cos\theta_j)
+  \;\leq\; C^{\mathrm{DoRA}}_{\mathrm{dir}}
+  \;\leq\; \kappa \sum_{j=1}^d (1 - \cos\theta_j).
+\]
+Under the global decomposition of MAP:
+\[
+  \frac{\kappa^2}{k+\kappa}\,(1 - \cos\Theta_{\mathrm{global}})
+  \;\leq\; C^{\mathrm{MAP}}_{\mathrm{dir}}
+  \;\leq\; \kappa\,(1 - \cos\Theta_{\mathrm{global}}).
+\]
+\end{theorem}
+
+\begin{proof}
+Apply \cref{lem:vmf_kl} to get $C^{\mathrm{DoRA}}_{\mathrm{dir}}
+= \sum_{j=1}^d \KL(Q_{\mathrm{dir},j} \| P_{\mathrm{dir},j})
+= \kappa \Ad(\kappa) \sum_{j=1}^d (1 - \cos\theta_j)$.
+The upper and lower bounds follow by substituting the bounds on
+$\Ad(\kappa)$ from \cref{lem:ad_bounds}:
+\[
+  \frac{\kappa^2}{d+\kappa} \sum_{j=1}^d (1-\cos\theta_j)
+  \;\leq\;
+  \kappa\Ad(\kappa)\sum_{j=1}^d(1-\cos\theta_j)
+  \;\leq\;
+  \kappa\sum_{j=1}^d(1-\cos\theta_j).
+\]
+The MAP case is identical, replacing $d$ with $k$ (the ambient dimension
+of the flattened weight vector) and the sum with the single global term.
+\end{proof}
+
+\begin{remark}
+These bounds hold for all $\kappa > 0$, removing the need for
+$\kappa \to \infty$ and making the analysis valid in
+moderate-concentration regimes.
+In particular, when $\kappa$ is small (diffuse prior), the lower and
+upper bounds are both $\asymp \kappa^2 / (d-1)$, showing the bounds
+are tight up to constants.
+\end{remark}
+
+% ---------------------------------------------------------------
+\subsection{Column-Wise Decomposition: DoRA}
+\label{sec:dora}
+
+Consider a weight matrix $W \in \R^{d \times d}$ decomposed column-wise:
+\[
+  w_j = m_j u_j, \quad m_j \in \R_+,\; u_j \in \Sd, \quad j = 1,\ldots,d.
+\]
+We make the following modeling assumptions.
+
+\begin{enumerate}
+  \item[(A1)] \textbf{Mean-field factorization.}
+    $P = \prod_{j=1}^d P_j$, $Q = \prod_{j=1}^d Q_j$.
+  \item[(A2)] \textbf{Independent magnitude and direction.}
+    $P_j = P_{\mathrm{mag},j} P_{\mathrm{dir},j}$ and similarly for $Q_j$.
+  \item[(A3)] \textbf{Gaussian magnitudes.}
+    $P_{\mathrm{mag},j} = \mathcal{N}(m_{0,j}, \sigma^2)$,
+    $Q_{\mathrm{mag},j} = \mathcal{N}(\hat{m}_j, \sigma^2)$.
+  \item[(A4)] \textbf{vMF directions with shared concentration.}
+    $P_{\mathrm{dir},j} = \vMF(\mu_{0,j}, \kappa)$,
+    $Q_{\mathrm{dir},j} = \vMF(\hat{\mu}_j, \kappa)$.
+\end{enumerate}
+%% [EDITORIAL]: Assumption (A3) fixes equal variance between prior and
+%% posterior.  This is a simplifying assumption; a reviewer may ask about
+%% the case $Q_{\mathrm{mag},j} = \mathcal{N}(\hat{m}_j, \sigma_j^2)$ with
+%% learned variance.  You might add a brief remark noting that extending
+%% to learned variance only adds a $\frac{1}{2}\ln(\sigma^2/\sigma_j^2) +
+%% \frac{\sigma_j^2}{2\sigma^2} - \frac{1}{2}$ term per column, which does
+%% not change the qualitative comparison.
+Under our assumptions, the KL decomposes as:
+\begin{align}
+  \KL(Q \| P)
+  &= \sum_{j=1}^d \KL(Q_j \| P_j) \notag\\
+  &= \sum_{j=1}^d \bigl[\KL(Q_{\mathrm{mag},j} \| P_{\mathrm{mag},j})
+     + \KL(Q_{\mathrm{dir},j} \| P_{\mathrm{dir},j})\bigr].
+\label{eq:kl_decomp}
+\end{align}
+The first equality uses (A1) and the product structure. The second equality uses (A2) and the fact that KL factorizes over independent components.
+For the Gaussian magnitude terms under (A3):
+\begin{equation}
+  \KL\bigl(\mathcal{N}(\hat{m}_j, \sigma^2) \;\|\; \mathcal{N}(m_{0,j}, \sigma^2)\bigr)
+  = \frac{(\hat{m}_j - m_{0,j})^2}{2\sigma^2}.
+\label{eq:kl_gaussian}
+\end{equation}
+This follows from the standard formula for Gaussians with equal variance.
+For the directional terms, Lemma~\ref{lem:vmf_kl} gives:
+\begin{equation}
+  \KL\bigl(\vMF(\hat{\mu}_j, \kappa) \;\|\; \vMF(\mu_{0,j}, \kappa)\bigr)
+  = \kappa \Ad(\kappa)\,(1 - \cos\theta_j),
+\label{eq:kl_vmf_col}
+\end{equation}
+where $\theta_j \coloneqq \arccos(\hat{\mu}_j^\top \mu_{0,j})$ is the
+angle between the posterior and prior mean directions for column $j$.
+
+Combining~\eqref{eq:kl_decomp}, \eqref{eq:kl_gaussian},
+and~\eqref{eq:kl_vmf_col} with Theorem~\ref{thm:mcallester}:
+
+\begin{theorem}[PAC-Bayes Bound for DoRA]
+\label{thm:pac_dora}
+Under our assumptions, let $\theta_j$ denote the angle between
+$\mu_{0,j}$ and $\hat{\mu}_j$.
+For any $\delta \in (0,1)$, with probability at least $1 - \delta$:
+\[
+  R(Q) \leq \hat{R}(Q) + \sqrt{
+  \frac{\displaystyle\sum_{j=1}^d
+    \left[\frac{(\hat{m}_j - m_{0,j})^2}{2\sigma^2}
+    + \kappa \Ad(\kappa)(1 - \cos\theta_j)\right]
+    + \ln\frac{2\sqrt{n}}{\delta}}{2n}}.
+\]
+\end{theorem}
+
+When $\kappa \gg d$ and $\theta_j \ll 1$:
+\begin{itemize}
+  \item $\Ad(\kappa) = 1 - O(d/\kappa)$, so $\kappa\Ad(\kappa) \approx \kappa$.
+  \item $1 - \cos\theta_j = \tfrac{\theta_j^2}{2} + O(\theta_j^4)$.
+\end{itemize}
+These follow from the Bessel function asymptotic $I_\nu(\kappa) \sim
+e^\kappa / \sqrt{2\pi\kappa}$ as $\kappa \to \infty$ and from the
+standard Taylor expansion of cosine. Therefore,
+\begin{equation}
+  \KL(Q \| P) \approx \sum_{j=1}^d
+  \left[\frac{(\hat{m}_j - m_{0,j})^2}{2\sigma^2}
+  + \frac{\kappa}{2}\theta_j^2\right].
+\label{eq:kl_highconc_dora}
+\end{equation}
+This is a sum of squared magnitude deviations and squared angular
+deviations, with the angular penalty weighted by $\kappa/2$.
+
+% ---------------------------------------------------------------
+\subsection{Global Decomposition: MAP}
+\label{sec:map}
+
+In MAP, the parameter vector $\Theta \in \R^k$ (the flattened weight
+matrix) is decomposed globally:
+\[
+  \Theta = \rho\, U, \quad \rho \in \R_+,\; U \in \Sk.
+\]
+The prior and posterior are:
+\[
+  P = \mathcal{N}(\rho_0, \sigma^2)\cdot\vMF(U_0, \kappa),
+  \qquad
+  Q = \mathcal{N}(\hat\rho, \sigma^2)\cdot\vMF(\hat{U}, \kappa).
+\]
+Since $P$ and $Q$ both factor over magnitude and direction, the KL
+decomposes as:
+\begin{align}
+  \KL(Q \| P)
+  &= \KL\bigl(\mathcal{N}(\hat\rho,\sigma^2) \| \mathcal{N}(\rho_0,\sigma^2)\bigr)
+   + \KL\bigl(\vMF(\hat{U},\kappa) \| \vMF(U_0,\kappa)\bigr) \notag\\
+  &= \frac{(\hat\rho - \rho_0)^2}{2\sigma^2}
+   + \kappa \Ak(\kappa)\,(1 - \cos\Theta_{\mathrm{global}}),
+\label{eq:kl_map}
+\end{align}
+where $\Theta_{\mathrm{global}} \coloneqq \arccos(\hat{U}^\top U_0)$ and
+$\Ak(\kappa) = I_{k/2}(\kappa)/I_{k/2-1}(\kappa)$.
+
+\begin{theorem}[PAC-Bayes Bound for MAP]
+\label{thm:pac_map}
+For any $\delta \in (0,1)$, with probability at least $1 - \delta$:
+\[
+  R(Q) \leq \hat{R}(Q) + \sqrt{
+  \frac{\dfrac{(\hat\rho - \rho_0)^2}{2\sigma^2}
+    + \kappa \Ak(\kappa)(1 - \cos\Theta_{\mathrm{global}})
+    + \ln\frac{2\sqrt{n}}{\delta}}{2n}}.
+\]
+In the high-concentration regime ($\kappa \gg k$, $\Theta_{\mathrm{global}} \ll 1$):
+\[
+  \KL(Q \| P) \approx \frac{(\hat\rho - \rho_0)^2}{2\sigma^2}
+  + \frac{\kappa}{2}\Theta_{\mathrm{global}}^2.
+\]
+\end{theorem}
+
+\begin{proof}
+Substitute~\eqref{eq:kl_map} into Theorem~\ref{thm:mcallester}.
+The high-concentration approximation uses the same Bessel asymptotics
+as in the DoRA case, with $d$ replaced by $k$.
+\end{proof}
+
+% ---------------------------------------------------------------
+\subsection{A Data-Dependent PAC-Bayesian Bound}
+\label{sec:catoni}
+
+The McAllester bound scales as $\sqrt{\KL / n}$, which can be
+conservative when the KL is small.
+We now state a Catoni-style bound~\cite{catoni2007pac} that scales
+\emph{linearly} in the KL.
+
+\begin{theorem}[Catoni PAC-Bayes Bound]
+\label{thm:catoni}
+Let $\phikl(x) = \tfrac{1}{\lambda}\ln(1 + \lambda x)$ and define
+the Catoni empirical risk:
+\[
+  \Rhatl(Q) \coloneqq \E_{h \sim Q}\frac{1}{n}\sum_{i=1}^n
+  \phikl\!\bigl(\ell(h, z_i)\bigr).
+\]
+For any $\lambda > 0$, with probability at least $1 - \delta$ over $S$,
+for all posteriors $Q$:
+\[
+  R(Q) \leq \frac{1}{1 - e^{-\lambda}}
+  \left(\Rhatl(Q) + \frac{\KL(Q\|P) + \ln\frac{1}{\delta}}{\lambda n}\right).
+\]
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+The key is that for $x \in [0,1]$, $\phikl(x) = \tfrac{1}{\lambda}\ln(1+\lambda x)
+\geq x - \tfrac{\lambda}{2}x^2$.  Applying the Donsker–Varadhan inequality
+to the tilted loss $e^{\lambda \ell(h,z_i)}$, one obtains the bound via
+the moment generating function of the loss.
+Specifically:
+\begin{align*}
+  \E_{h\sim Q}\E_S\left[\frac{1}{n}\sum_i e^{\lambda \ell(h,z_i)}\right]
+  &\leq e^{\KL(Q\|P)} \cdot
+    \E_{h\sim P}\E_S\left[\frac{1}{n}\sum_i e^{\lambda \ell(h,z_i)}\right].
+\end{align*}
+Applying $\ln(1+x) \geq x/(1+x)$ and rearranging yields the stated bound;
+see~\cite{catoni2007pac} for the full proof.
+
+%% [EDITORIAL]: Consider including a full proof here (it is short) to
+%% make the paper self-contained for a CS 229 audience.
+\end{proof}
+
+\begin{remark}
+Unlike McAllester's bound, Theorem~\ref{thm:catoni}:
+\begin{itemize}
+  \item scales linearly in $\KL(Q\|P)$ rather than $\sqrt{\KL}$,
+    giving tighter bounds when $\KL$ is small;
+  \item allows tuning $\lambda$ to trade off empirical risk bias and
+    complexity penalty;
+  \item reduces to McAllester's bound (up to constants) when
+    $\lambda = O(1/\sqrt{n})$.
+\end{itemize}
+\end{remark}
+
+\paragraph{Application to weight-decomposed adaptation.}
+Substituting the KL bounds from Sections~\ref{sec:dora} and~\ref{sec:map}
+into Theorem~\ref{thm:catoni}:
+\[
+  R(Q) \lesssim \Rhatl(Q) + \frac{1}{\lambda n}
+  \left(C_{\mathrm{mag}} + C_{\mathrm{dir}} + \ln\frac{1}{\delta}\right),
+\]
+where:
+\begin{align*}
+  C^{\mathrm{DoRA}}_{\mathrm{dir}}
+  &= \kappa \Ad(\kappa) \sum_{j=1}^d (1 - \cos\theta_j),\\
+  C^{\mathrm{MAP}}_{\mathrm{dir}}
+  &= \kappa \Ak(\kappa)(1 - \cos\Theta_{\mathrm{global}}),\\
+  C_{\mathrm{mag}}
+  &= \sum_{j=1}^d \frac{(\hat{m}_j - m_{0,j})^2}{2\sigma^2}
+    \quad \text{(DoRA)}, \quad
+    \text{or}\quad
+    \frac{(\hat\rho - \rho_0)^2}{2\sigma^2}
+    \quad \text{(MAP)}.
+\end{align*}
+
+% ---------------------------------------------------------------
+\subsection{Comparison Between Local and Global Adaptation}
+\label{sec:comparison}
+
+We now compare the directional complexity terms of DoRA and MAP.
+The following theorem is the geometric heart of the paper.
+
+\begin{theorem}[Angular Complexity Comparison]
+\label{thm:comparison}
+Let $u_j, \hat{u}_j \in \Sd$ be the pretrained and fine-tuned unit
+direction vectors for column $j$ in DoRA, with $\theta_j \in [0, \pi/2]$
+(as holds in fine-tuning).
+Define the concatenated unit vectors:
+\[
+  U \coloneqq \frac{1}{\sqrt{d}}(u_1, \ldots, u_d) \in \mathbb{S}^{dk-1},
+  \qquad
+  \hat{U} \coloneqq \frac{1}{\sqrt{d}}(\hat{u}_1, \ldots, \hat{u}_d).
+\]
+Then $\Theta_{\mathrm{global}} \coloneqq \arccos(\hat{U}^\top U)$ satisfies:
+\begin{equation}\label{eq:thm_comparison}
+  \Theta_{\mathrm{global}}^2
+  \;\leq\; \frac{1}{d}\sum_{j=1}^d \theta_j^2
+  \;\leq\; \sum_{j=1}^d \theta_j^2.
+\end{equation}
+Moreover, the following identity holds exactly:
+\begin{equation}\label{eq:cos_identity}
+  1 - \cos\Theta_{\mathrm{global}}
+  = \frac{1}{d}\sum_{j=1}^d (1 - \cos\theta_j).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1 (exact identity).}
+From the definition of $\hat{U}$ and $U$:
+\[
+  \cos\Theta_{\mathrm{global}} = \hat{U}^\top U
+  = \frac{1}{d}\sum_{j=1}^d \hat{u}_j^\top u_j
+  = \frac{1}{d}\sum_{j=1}^d \cos\theta_j,
+\]
+so the following identity holds \emph{exactly}:
+\begin{equation}
+  1 - \cos\Theta_{\mathrm{global}}
+  = \frac{1}{d}\sum_{j=1}^d (1 - \cos\theta_j).
+  \label{eq:cos_id_proof}
+\end{equation}
+
+\textbf{Step 2 (Jensen's inequality).}
+Under the assumption $\theta_j \in [0,\pi/2]$, the function $\cos$ is
+concave since $\cos'' x = - \cos x \le 0$ for $x \in [0,\pi/2]$.  Jensen's inequality for convex functions gives:
+\[
+  \frac{1}{d}\sum_{j=1}^d \cos\theta_j
+  \;\geq\; \cos\!\left(\frac{1}{d}\sum_{j=1}^d \theta_j\right)
+  = \cos\bar\theta,
+  \quad \bar\theta \coloneqq \frac{1}{d}\sum_{j=1}^d \theta_j.
+\]
+Since $\arccos$ is strictly decreasing:
+\[
+  \Theta_{\mathrm{global}}
+  = \arccos\!\left(\frac{1}{d}\sum_{j=1}^d\cos\theta_j\right)
+  \;\leq\; \arccos(\cos\bar\theta)
+  = \bar\theta.
+\]
+
+\textbf{Step 3 (Cauchy--Schwarz).}
+Squaring and applying the QM--AM inequality
+$(\frac{1}{d}\sum\theta_j)^2 \leq \frac{1}{d}\sum\theta_j^2$:
+\[
+  \Theta_{\mathrm{global}}^2
+  \;\leq\; \bar\theta^2
+  = \left(\frac{1}{d}\sum_{j=1}^d\theta_j\right)^{\!2}
+  \;\leq\; \frac{1}{d}\sum_{j=1}^d\theta_j^2
+  \;\leq\; \sum_{j=1}^d\theta_j^2.
+\]
+The stronger bound $\Theta_{\mathrm{global}}^2 \leq \frac{1}{d}\sum_j\theta_j^2$
+also holds directly.
+\end{proof}
+
+\begin{remark}
+Theorem~\ref{thm:comparison} reveals the geometric intuition concisely:
+the global angle $\Theta_{\mathrm{global}}$ is an \emph{average} over local
+angles (in the sense of averaging their cosines), whereas the DoRA
+directional complexity $C^{\mathrm{DoRA}}_{\mathrm{dir}}$ is a \emph{sum}.
+Consequently, MAP always has a smaller or equal \emph{global} angular
+deviation, but this comes at the cost of losing per-column resolution.
+\end{remark}
+
+\paragraph{Implications.}
+As a result:
+\begin{itemize}
+  \item MAP incurs a smaller directional KL penalty when updates are
+    highly aligned across columns.
+  \item DoRA achieves tighter bounds when updates are sparse or
+    localized (many $\theta_j = 0$).
+\end{itemize}
+This highlights a fundamental tradeoff between expressivity and
+generalization complexity.
+
+% ---------------------------------------------------------------
+\subsection{When Does DoRA Achieve a Tighter Bound?}
+\label{sec:dora_advantage}
+
+\begin{theorem}[DoRA Advantage Under Localized Updates]
+\label{thm:dora_advantage}
+Suppose the update is sparse: for some set $\mathcal{S} \subseteq \{1,\ldots,d\}$
+with $|\mathcal{S}| = s \ll d$, $\theta_j = 0$ for $j \notin \mathcal{S}$ and
+$\theta_j \leq \varepsilon$ for $j \in \mathcal{S}$.
+Then:
+\[
+  C^{\mathrm{DoRA}}_{\mathrm{dir}} \leq \kappa \Ad(\kappa) \cdot s\,(1 - \cos\varepsilon).
+\]
+Moreover, under the exact identity~\eqref{eq:cos_identity} of
+Theorem~\ref{thm:comparison}, and using $\theta_j = 0$ for $j \notin
+\mathcal{S}$:
+\begin{equation}
+  1 - \cos\Theta_{\mathrm{global}}
+  = \frac{1}{d}\sum_{j \in \mathcal{S}} (1-\cos\theta_j)
+  \leq \frac{s}{d}(1 - \cos\varepsilon),
+\label{eq:global_upper}
+\end{equation}
+where the inequality uses $1-\cos\theta_j \leq 1-\cos\varepsilon$ for
+$\theta_j \leq \varepsilon$ (since $1-\cos$ is increasing on $[0,\pi]$).
+Therefore:
+\[
+  C^{\mathrm{MAP}}_{\mathrm{dir}} \leq \kappa \Ak(\kappa)\cdot\frac{s}{d}(1 - \cos\varepsilon).
+\]
+\begin{remark}
+Both DoRA and MAP thus admit \emph{upper} bounds proportional to $s(1-\cos\varepsilon)$
+in the sparse regime.
+Comparing the two upper bounds:
+\[
+  \frac{C^{\mathrm{MAP}}_{\mathrm{dir}}\text{ upper bound}}
+       {C^{\mathrm{DoRA}}_{\mathrm{dir}}\text{ upper bound}}
+  = \frac{\Ak(\kappa)/d}{\Ad(\kappa)}
+  = \frac{\Ak(\kappa)}{d\,\Ad(\kappa)}.
+\]
+Since $\Ak(\kappa) < \Ad(\kappa)$ for $k > d$ (as $A$ is decreasing in dimension),
+the MAP upper bound is always smaller by a factor $\Ak(\kappa)/(d\,\Ad(\kappa)) < 1/d$.
+Using the leading-order approximation $A_n(\kappa) \approx \kappa/n$ for $n \gg \kappa$:
+this ratio is approximately $\kappa/k$ (the inverse full dimension).
+
+However, this does \emph{not} mean MAP is universally preferred.
+The comparison is between priors on spheres of very different dimensions ($d$
+vs.\ $k = d^2$ for a square weight matrix).
+With fixed $\kappa$, the MAP prior on $\mathbb{S}^{k-1}$ is nearly flat
+($\Ak(\kappa) \approx \kappa/k \approx 0$), providing essentially no
+directional regularization for large $k$.
+DoRA's per-column prior, by contrast, remains informative ($\Ad(\kappa) \approx
+\kappa/d$).
+The correct interpretation is that DoRA provides a \emph{more discriminating}
+complexity measure: its bound distinguishes between a model where $s$ specific
+columns rotated (sparse) vs.\ all $d$ columns rotating equally (dense),
+whereas MAP conflates both into a single global angle with negligible KL.
+For a fair quantitative comparison, $\kappa$ should be scaled by the
+respective sphere dimension (e.g.\ $\kappa_{\mathrm{eff}} = \kappa \cdot d$ for
+DoRA and $\kappa_{\mathrm{eff}} = \kappa \cdot k$ for MAP), a calibration
+question addressed in Section~\ref{sec:disc_kappa}.
+\end{remark}
+\end{theorem}
+
+\begin{proof}
+The upper bound on $C^{\mathrm{DoRA}}_{\mathrm{dir}}$ follows directly: since
+$\theta_j = 0$ for $j \notin \mathcal{S}$, those terms contribute zero to
+the sum.  For $j \in \mathcal{S}$, $(1-\cos\theta_j) \leq (1-\cos\varepsilon)$.
+
+For the MAP upper bound: equation~\eqref{eq:global_upper} gives
+$1 - \cos\Theta_{\mathrm{global}} \leq \tfrac{s}{d}(1-\cos\varepsilon)$
+(since $\theta_j = 0$ for $j \notin \mathcal{S}$ and $1-\cos\theta_j \leq 1-\cos\varepsilon$
+for $\theta_j \leq \varepsilon$).
+The MAP directional complexity bound then follows by substituting into the
+upper bound of Theorem~\ref{thm:nonasymptotic}.
+\end{proof}
+
+\begin{remark}[On the DoRA vs.\ MAP comparison]
+\label{rem:comparison}
+The ratio of upper bounds from Theorem~\ref{thm:dora_advantage} is
+$d\,\Ad(\kappa)/\Ak(\kappa)$.
+Since $A$ is \emph{decreasing} in dimension, $\Ak(\kappa) < \Ad(\kappa)$ for
+$k > d$, so this ratio exceeds $d > 1$: DoRA's upper bound is always larger
+than MAP's.
+
+The condition $d\,\Ad(\kappa) < \Ak(\kappa)$ stated in an earlier version of
+this corollary is \emph{never satisfied} in practice (it would require $A$ to
+be increasing, contradicting the Bessel ratio monotonicity).
+The correct conclusion is that the two methods trade off \emph{discriminability}
+vs.\ \emph{raw KL magnitude}: DoRA resolves which columns changed;
+MAP achieves a smaller KL by using a diffuse prior on the global direction.
+The practical guidance in Table~\ref{tab:guidance} rests on discriminability
+(which bound best reflects the actual update structure), not on which
+literal KL value is smaller.
+\end{remark}
+
+\paragraph{Interpretation.}
+DoRA achieves a strictly tighter bound when:
+\begin{itemize}
+  \item updates are sparse (small $s/d$),
+  \item directional changes are localized to few columns,
+  \item global reorientation would unnecessarily rotate unaffected components.
+\end{itemize}
+
+\paragraph{Dense regime.}
+Conversely, when all columns rotate coherently ($\theta_j \approx
+\Theta_{\mathrm{global}}$ for all $j$), the per-column angles sum to
+$\sum_j(1-\cos\theta_j) \approx d(1-\cos\Theta_{\mathrm{global}})$,
+giving $C^{\mathrm{DoRA}}_{\mathrm{dir}} \approx d\cdot C^{\mathrm{MAP}}_{\mathrm{dir}}$.
+Thus $C^{\mathrm{MAP}}_{\mathrm{dir}} \ll C^{\mathrm{DoRA}}_{\mathrm{dir}}$ in this regime,
+and MAP is preferred.
+
+%% [EDITORIAL]: This is the most compelling theoretical contribution.
+%% Consider adding a simple synthetic experiment (e.g., a
+%% $2\times 2$ matrix) illustrating the two regimes with concrete numbers.
+
+% ============================================================
+\section{Data-Dependent Posteriors via Gibbs Measures}
+\label{sec:gibbs}
+
+%% [EDITORIAL]: Section 2.5 of the original draft placed the Catoni
+%% bound \emph{before} the comparison theorem; the narrative flow is
+%% better with the comparison first (so the reader understands what is
+%% being optimized) and the Gibbs section second.
+%% The current restructuring follows this logic.
+
+\subsection{Gibbs Posterior}
+\label{sec:gibbs_def}
+
+Given the Catoni objective:
+\[
+  \mathcal{L}_\lambda(Q) \coloneqq \Rhatl(Q) + \frac{1}{\lambda n}\KL(Q \| P),
+\]
+the unique minimizer over all distributions $Q$ is the \emph{Gibbs posterior}:
+\begin{equation}
+  \frac{dQ^*(h)}{dP(h)}
+  = \frac{\exp\bigl(-\lambda n\,\Rhatl(h)\bigr)}{Z_\lambda},
+  \qquad
+  Z_\lambda = \int \exp\bigl(-\lambda n\,\Rhatl(h)\bigr)\,dP(h).
+\label{eq:gibbs}
+\end{equation}
+The Gibbs posterior balances data fit (via $\Rhatl(h)$) and proximity to
+the prior (via the implicit $\KL$ regularization).
+
+\subsection{Gibbs Posterior for Weight-Decomposed Adaptation}
+\label{sec:gibbs_wda}
+
+Under our assumptions and the structure of DoRA, the
+Gibbs posterior is:
+\[
+  Q^*\!\bigl(\{m_j, u_j\}_{j=1}^d\bigr)
+  \propto \prod_{j=1}^d P_{\mathrm{mag},j}(m_j)\,P_{\mathrm{dir},j}(u_j)
+  \cdot\exp\bigl(-\lambda n\,\Rhatl(\{m_j u_j\})\bigr).
+\]
+While the loss couples all columns through the forward pass, we obtain a
+tractable approximation via mean-field:
+\[
+  Q(\{m_j, u_j\}) = \prod_{j=1}^d Q_{\mathrm{mag},j}(m_j)\,Q_{\mathrm{dir},j}(u_j).
+\]
+Minimizing $\E_Q[\Rhatl(h)] + \tfrac{1}{\lambda n}\KL(Q\|P)$ over
+mean-field families and substituting the KL formulas from
+section 3.3:
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{DoRA}}
+  = \E_Q[\Rhatl(h)]
+  + \frac{1}{\lambda n}\sum_{j=1}^d
+    \left[\frac{(\hat{m}_j - m_{0,j})^2}{2\sigma^2}
+    + \kappa \Ad(\kappa)(1-\cos\theta_j)\right].
+\label{eq:obj_dora}
+\end{equation}
+Similarly, for MAP:
+\begin{equation}
+  \mathcal{L}_{\mathrm{MAP}}
+  = \E_Q[\Rhatl(h)]
+  + \frac{1}{\lambda n}
+    \left[\frac{(\hadt\rho - \rho_0)^2}{2\sigma^2}
+    + \kappa \Ak(\kappa)(1-\cos\Theta_{\mathrm{global}})\right].
+\label{eq:obj_map}
+\end{equation}
+
+\paragraph{Connection to existing regularization.}
+The objectives \eqref{eq:obj_dora} and \eqref{eq:obj_map} each have two
+parts:
+\begin{itemize}
+  \item \textbf{Weight decay}: the $(\hat{m}-m_0)^2/2\sigma^2$ term
+    penalizes deviation of magnitudes from the pretrained values.
+  \item \textbf{Cosine regularization}: the $\kappa\Ad(\kappa)(1-\cos\theta)$
+    term penalizes angular deviation from the pretrained directions.
+\end{itemize}
+These penalties arise from first principles via the PAC-Bayesian framework
+rather than being introduced ad hoc—providing a theoretical justification
+for cosine-based regularizers used empirically in PEFT.
+
+%% [EDITORIAL]: This connection is one of the most elegant contributions.
+%% Consider adding a forward-pointer to how $\kappa$ acts as the
+%% regularization coefficient: larger $\kappa$ means stronger directional
+%% regularization.  Practitioners can tune $\kappa$ as a hyperparameter
+%% and interpret it as prior confidence in the pretrained directions.
+
+% ============================================================
+\section{Theoretical Predictions and Planned Experiments}
+\label{sec:experiments}
+
+\noindent\textbf{Scope of this section.}
+The four predictions stated below follow directly from the theoretical
+analysis of Sections~\ref{sec:pac_analysis}--\ref{sec:comparison}.
+This section states each prediction in testable, falsifiable form,
+specifies the experimental protocol required to evaluate it, and
+identifies what confirming or disconfirming evidence would look like.
+\emph{No experiments have been conducted; this section constitutes a
+pre-registered plan for future empirical work.}
+
+% ---------------------------------------------------------------
+\subsection{Experimental Setup}
+\label{sec:exp_setup}
+
+\paragraph{Models and tasks.}
+We will fine-tune RoBERTa-base (125\,M parameters)~\cite{liu2019roberta}
+on six GLUE tasks (SST-2, MNLI, QQP, QNLI, MRPC, RTE) and optionally
+LLaMA-2-7B~\cite{touvron2023llama} on instruction-following using the
+Alpaca-52k dataset~\cite{alpaca2023}.
+We will compare three PEFT methods --- LoRA (rank $r = 8$), DoRA
+(rank $r = 8$), and MAP (rank $r = 8$) --- matched for total trainable
+parameter count.
+All runs will use AdamW with a cosine learning-rate schedule, peak
+learning rate $2 \times 10^{-4}$, and three random seeds; we will report
+mean and standard deviation across seeds.
+
+\paragraph{Computing $\theta_j$ and $\Theta_{\mathrm{global}}$.}
+After fine-tuning, for each weight matrix $W \in \R^{d_{\mathrm{out}}
+\times d_{\mathrm{in}}}$ we will compute the column-wise angle
+\[
+  \theta_j = \arccos\!\left(
+    \frac{w_{0,j}^\top \hat{w}_j}{\|w_{0,j}\|\,\|\hat{w}_j\|}
+  \right), \quad j = 1, \ldots, d_{\mathrm{in}},
+\]
+where $w_{0,j}$ and $\hat{w}_j$ are the $j$-th columns of the
+pretrained and fine-tuned weight matrices, respectively.
+The global angle is computed on the flattened vectors:
+$\Theta_{\mathrm{global}} = \arccos(\hat{w}^\top w_0 /
+(\|\hat{w}\|\,\|w_0\|))$ where $w_0, \hat{w} \in \R^{d_{\mathrm{out}}
+d_{\mathrm{in}}}$.
+
+\paragraph{Directional complexity estimator.}
+We will estimate:
+\[
+  \widehat{C}^{\mathrm{DoRA}}_{\mathrm{dir}}
+    = \kappa \sum_{j=1}^{d_{\mathrm{in}}} (1 - \cos\theta_j),
+  \qquad
+  \widehat{C}^{\mathrm{MAP}}_{\mathrm{dir}}
+    = \kappa\,(1 - \cos\Theta_{\mathrm{global}}),
+\]
+using $\kappa = 10$ as the default, with an ablation over
+$\kappa \in \{1, 5, 10, 50, 100\}$ (Section~\ref{sec:ablation}).
+The effective sparsity is $s = |\{j : \theta_j > \tau\}|$,
+$\tau = 0.01$ radians.
+Layer-level estimates will be aggregated over all weight matrices of the
+same type (attention vs.\ MLP) and averaged across layers.
+
+% ---------------------------------------------------------------
+\subsection{Prediction P1: $\widehat{C}_{\mathrm{dir}}$ Predicts Test Error}
+\label{sec:kl_predict}
+
+\paragraph{Theoretical basis.}
+The PAC-Bayes bound (Theorem~\ref{thm:mcallester}) implies
+\[
+  \mathrm{err}(h) \;\lesssim\; \hat{R}_n(h) + \sqrt{\frac{C_{\mathrm{dir}}}{n}},
+\]
+so $C_{\mathrm{dir}}$ should be positively correlated with the
+generalisation gap, and hence with test error after controlling for
+training error.
+
+\paragraph{Protocol.}
+For each (method, task, layer-type, seed) combination we will record the
+pair $(\widehat{C}_{\mathrm{dir}}, \mathrm{err})$ where $\mathrm{err}$ is
+the task-specific test error (1 $-$ accuracy for classification; perplexity
+normalised to $[0,1]$ via $1 - e^{-\Delta}$ for generation).
+We will pool all 108 pairs
+(3 methods $\times$ 6 tasks $\times$ 2 layer types $\times$ 3 seeds)
+and compute:
+\begin{itemize}
+  \item \textbf{Spearman rank correlation} $\rho_S$ between
+    $\widehat{C}_{\mathrm{dir}}$ and $\mathrm{err}$.
+  \item \textbf{Pearson correlation} $\rho_P$ between
+    $\ln\widehat{C}_{\mathrm{dir}}$ and $\mathrm{err}$, testing the
+    log-linear relationship implied by the $\sqrt{C/n}$ scaling.
+\end{itemize}
+Statistical significance will be assessed via a permutation test with
+$B = 10{,}000$ bootstrap resamples; we will report $p$-values and
+95\% confidence intervals.
+
+\paragraph{Expected outcome.}
+We predict $\rho_S > 0.5$ with $p < 0.01$, with the log-scale Pearson
+correlation providing stronger fit than the linear-scale correlation,
+consistent with the $\sqrt{C_{\mathrm{dir}}/n}$ scaling of the bound.
+A scatter plot of $\widehat{C}_{\mathrm{dir}}$ (log scale) vs.\ test error
+will visualise the relationship.
+
+\paragraph{Falsification criterion.}
+A result $\rho_S < 0.2$ or $p > 0.05$ would call into question whether
+the angular complexity measure captures the dominant generalisation-gap
+driver in practice.
+
+% ---------------------------------------------------------------
+\subsection{Prediction P2: Sparse vs.\ Dense Regime Crossover}
+\label{sec:sparse_dense}
+
+\paragraph{Theoretical basis.}
+Theorem~\ref{thm:dora_advantage} establishes that
+$C^{\mathrm{DoRA}}_{\mathrm{dir}} < C^{\mathrm{MAP}}_{\mathrm{dir}}$
+when the update is sparse ($s/d$ small), with MAP preferred when updates
+are globally aligned ($s/d$ large).
+The crossover occurs near $s/d \approx 0.5$ under uniform-angle
+assumptions.
+
+\paragraph{Protocol.}
+We will vary the sparsity ratio $s/d$ by sweeping rank
+$r \in \{2, 4, 8, 16, 32\}$ in DoRA and MAP, with all other
+hyperparameters fixed.
+Lower rank induces more localised updates (smaller $s/d$).
+We will plot $\widehat{C}_{\mathrm{dir}}$ for DoRA and MAP as a function
+of $s/d$ on SST-2 (representative task) and record the empirical crossover
+rank.
+
+\paragraph{Expected outcome.}
+DoRA should achieve strictly lower $\widehat{C}_{\mathrm{dir}}$ at
+$s/d \lesssim 0.3$, with MAP preferred at $s/d \gtrsim 0.7$, and the
+curves crossing near $s/d \approx 0.5$.
+
+\paragraph{Falsification criterion.}
+Absence of a crossover (DoRA always preferred, or MAP always preferred)
+would contradict Theorem~\ref{thm:dora_advantage} and suggest the
+sparsity-ratio parameterisation does not match the theoretical $s/d$ regime.
+
+% ---------------------------------------------------------------
+\subsection{Prediction P3: Attention vs.\ MLP Angular Variance}
+\label{sec:alignment}
+
+\paragraph{Theoretical basis.}
+The layer-specific guidance in Table~\ref{tab:guidance} rests on the
+empirical finding of Tanwar et al.~\cite{tanwar2025domain} that MLP
+layers undergo larger directional updates during fine-tuning than
+attention layers.
+Our framework translates this into a prediction about
+$\mathrm{Var}(\theta_j)$: if MLP layers consistently show higher angular
+variance, MAP is appropriate for attention and DoRA is appropriate for MLP.
+
+\paragraph{Protocol.}
+For each fine-tuned model we will compute $\mathrm{Var}(\theta_j)$
+separately over attention weight matrices ($W_Q, W_K, W_V, W_O$) and
+MLP weight matrices ($W_{\mathrm{up}}, W_{\mathrm{gate}},
+W_{\mathrm{down}}$), averaged across layers and seeds.
+Table~\ref{tab:variance} will report the MLP/attention ratio for each
+task upon completion of the experiments.
+
+\begin{table}[ht]
+\centering
+\caption{Planned measurement: mean per-column angular variance
+  $\mathrm{Var}(\theta_j)$ (rad$^2$) for attention vs.\ MLP layers,
+  averaged over GLUE and Alpaca tasks.
+  Values to be filled upon experiment completion.
+  The theoretical prediction is MLP/Attn ratio $> 1$ across all tasks,
+  consistent with \cite{tanwar2025domain}.}
+\label{tab:variance}
+\begin{tabular}{lccc}
+\toprule
+Task & Attn $\mathrm{Var}(\theta_j)$ &
+  MLP $\mathrm{Var}(\theta_j)$ & Ratio (MLP/Attn) \\
+\midrule
+SST-2  & --- & --- & (predicted $> 1$) \\
+MNLI   & --- & --- & (predicted $> 1$) \\
+QQP    & --- & --- & (predicted $> 1$) \\
+QNLI   & --- & --- & (predicted $> 1$) \\
+MRPC   & --- & --- & (predicted $> 1$) \\
+RTE    & --- & --- & (predicted $> 1$) \\
+\midrule
+Mean   & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Falsification criterion.}
+If attention and MLP layers show comparable angular variance (ratio $< 1.5$),
+the layer-specific guidance in Table~\ref{tab:guidance} should be revised
+to treat all layers uniformly.
+
+% ---------------------------------------------------------------
+\subsection{Prediction P4: Non-Asymptotic vs.\ Asymptotic Bound Tightness}
+\label{sec:ablation}
+
+\paragraph{Theoretical basis.}
+The asymptotic approximation replaces $\Ad(\kappa)$ with 1, overestimating
+the true directional KL by a factor of $1/\Ad(\kappa)$.
+For moderate $\kappa$ and large $d$ (as in transformer weight matrices),
+$\Ad(\kappa) \ll 1$, so the non-asymptotic bound
+(Theorem~\ref{thm:nonasymptotic}) is strictly tighter.
+The exact values of $\Ad(\kappa)$ for $d = 768$ (RoBERTa-base hidden
+dimension) can be computed numerically as
+$\Ad(\kappa) = I_{d/2}(\kappa)/I_{d/2-1}(\kappa)$;
+for $d = 768$ and $\kappa \leq 100$, $\Ad(\kappa) \ll 1$, so the
+non-asymptotic correction is large.
+
+\paragraph{Protocol.}
+For $\kappa \in \{1, 5, 10, 50, 100\}$ we will compute both the
+asymptotic bound ($\kappa\sum(1-\cos\theta_j)$) and the non-asymptotic
+bound ($\kappa\Ad(\kappa)\sum(1-\cos\theta_j)$) on the empirical
+$\{\theta_j\}$ values from RoBERTa-base fine-tuned on SST-2
+(DoRA, seed 1).
+We will report the overestimate ratio and compare the corresponding
+PAC-Bayes bound values.
+
+\paragraph{Expected outcome.}
+For $\kappa \leq 10$, the overestimate should be substantial (tens of
+percent to orders of magnitude), shrinking toward zero as $\kappa \to \infty$.
+The Catoni $\lambda^*$ ablation (Theorem~\ref{thm:catoni}) should yield
+a materially tighter bound than the McAllester variant
+(Theorem~\ref{thm:mcallester}) at the optimal $\lambda^*$.
+
+\paragraph{Falsification criterion.}
+If $\Ad(\kappa) \approx 1$ for the $\kappa$ values used in practice,
+the non-asymptotic correction would be negligible and the asymptotic
+formula would be adequate.
+Given that $d = 768$, this outcome is highly unlikely but would imply
+that either $\kappa \gg d$ in typical fine-tuning or that the
+column-wise vMF model is miscalibrated.
+
+% ---------------------------------------------------------------
+\subsection{Summary of Predictions}
+
+Table~\ref{tab:exp_summary} summarises the four predictions and the
+criteria by which they will be evaluated.
+
+\begin{table}[ht]
+\centering
+\caption{Theoretical predictions and planned validation criteria.}
+\label{tab:exp_summary}
+\begin{tabular}{p{3.5cm}p{3cm}p{4.5cm}}
+\toprule
+Prediction & Key metric & Success criterion \\
+\midrule
+(P1) $C_{\mathrm{dir}}$ predicts test error &
+  Spearman $\rho_S$ &
+  $\rho_S > 0.5$, $p < 0.01$, pooled over 108 data points \\
+(P2) DoRA preferred in sparse regime &
+  Crossover $s/d$ &
+  DoRA $<$ MAP at $s/d \leq 0.3$; MAP $<$ DoRA at $s/d \geq 0.7$ \\
+(P3) MLP Var$(\theta_j) >$ Attn &
+  Variance ratio &
+  MLP/Attn ratio $> 1.5$ across all GLUE tasks \\
+(P4) Non-asym.\ bound tighter &
+  Overestimate ratio at $\kappa=10$ &
+  Overestimate $> 10\%$ for $d=768$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+% ============================================================
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Practical Guidance: When to Use DoRA vs.\ MAP}
+\label{sec:disc_guidance}
+
+Our theoretical results yield directly actionable decision criteria.
+The key observable is the \emph{effective sparsity ratio} $s/d$, where
+$s = |\{j : \theta_j > \tau\}|$ counts the columns whose pretrained
+directions change significantly (beyond a threshold $\tau$), out of $d$
+total columns.
+Theorem~\ref{thm:dora_advantage} and Remark~\ref{rem:comparison} together imply:
+
+\begin{itemize}
+  \item \textbf{Use DoRA when $s/d$ is small.}  When only a sparse subset
+    of columns undergo meaningful directional change, column-wise
+    decomposition concentrates complexity where the update actually occurs.
+    DoRA's directional KL bound scales as $O(s)$ and explicitly tracks
+    \emph{which} $s$ columns changed.
+    While the MAP upper bound is numerically smaller (Remark~\ref{rem:comparison}),
+    this is because the MAP prior on $\mathbb{S}^{k-1}$ (with $k = d^2$) is
+    nearly flat and provides negligible directional regularization for large $k$.
+    DoRA's bound is the more \emph{discriminating} complexity measure:
+    it distinguishes a sparse, localized update from a globally diffuse one,
+    which MAP cannot.
+
+  \item \textbf{Use MAP when $s/d \approx 1$ and variance of
+    $\{\theta_j\}$ is low.}  When nearly all columns rotate by
+    approximately the same angle ($\theta_j \approx \varepsilon$ for
+    all $j$), the global rotation captures the shared structure in a single
+    degree of freedom, giving
+    $C^{\mathrm{MAP}}_{\mathrm{dir}} = O(\kappa(1 - \cos\varepsilon))$
+    versus
+    $C^{\mathrm{DoRA}}_{\mathrm{dir}} = O(\kappa d (1 - \cos\varepsilon))$,
+    a factor of $d$ improvement for MAP.
+
+  \item \textbf{Use variance of $\{\theta_j\}$ as a diagnostic.}
+    In practice, the $\theta_j$ can be computed cheaply after a short
+    fine-tuning run (or even estimated from gradient signals before
+    training).  High variance indicates localized updates and favors
+    DoRA; near-zero variance indicates globally aligned updates and
+    favors MAP.
+\end{itemize}
+
+\paragraph{Layer-specific guidance.}
+A practically important refinement emerges from the empirical finding of
+Tanwar et al.~\cite{tanwar2025domain} that attention and MLP layers
+exhibit qualitatively different directional update patterns during
+domain-specific fine-tuning: attention weight updates primarily
+\emph{amplify existing directions} in the pretrained subspace, while MLP
+updates primarily \emph{inject novel directions} orthogonal to the
+pretrained subspace.
+In the language of our framework, this means:
+\begin{itemize}
+  \item \textbf{Attention weight matrices} ($W_Q, W_K, W_V, W_O$) tend to
+    have low $\mathrm{Var}(\theta_j)$ and high $s/d$ (many columns rotate
+    by small, similar angles) $\Rightarrow$ \textbf{MAP is preferred}:
+    the global rotation captures the shared amplification in a single
+    angular parameter.
+  \item \textbf{MLP weight matrices} ($W_{\mathrm{up}},
+    W_{\mathrm{gate}}, W_{\mathrm{down}}$) tend to have high
+    $\mathrm{Var}(\theta_j)$ and moderate $s/d$ (a sparse subset of
+    columns rotate substantially to inject new information)
+    $\Rightarrow$ \textbf{DoRA is preferred}: per-column KL accounts
+    for exactly which columns changed and by how much.
+\end{itemize}
+
+Relatedly, AdaLoRA~\cite{zhang2023adalora} finds empirically that attention
+and MLP modules merit different rank budgets across layers, a finding
+consistent with our analysis: modules with sparse, localized updates
+benefit from column-wise complexity accounting (DoRA), while modules
+with globally uniform updates are better captured by a single rotation
+(MAP).
+
+\noindent Table~\ref{tab:guidance} consolidates these recommendations
+along two axes---layer type and task proximity---into a single reference
+for practitioners.
+
+\begin{table}[ht]
+\centering
+\caption{Practical guidance for choosing DoRA vs.\ MAP, organized by
+  observable regime and transformer layer type.
+  Observables $s/d$ and $\mathrm{Var}(\theta_j)$ can be estimated after
+  50--100 gradient steps without completing full fine-tuning.
+  Empirical support for the attention/MLP distinction comes from
+  \cite{tanwar2025domain}; task-proximity effects are established
+  in \cite{vu2020exploring,yang2024unveiling}.}
+\label{tab:guidance}
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{p{3.2cm}p{1.5cm}p{2.0cm}p{1.8cm}p{4.5cm}}
+\toprule
+\textbf{Setting} & \textbf{Typical $s/d$} &
+  \textbf{Typical $\mathrm{Var}(\theta_j)$} &
+  \textbf{Rec.} & \textbf{Rationale} \\
+\midrule
+Attention layers \newline ($W_Q, W_K, W_V, W_O$) &
+  High (${\approx}1$) & Low &
+  MAP & Globally aligned amplification of pretrained directions;
+        single global angle captures all column rotations compactly \\
+\addlinespace
+MLP layers \newline ($W_{\mathrm{up}}, W_{\mathrm{gate}}, W_{\mathrm{down}}$) &
+  Low--med. & High &
+  DoRA & Sparse injection of new directions; per-column KL is
+         $O(s)$ vs.\ MAP's $O(d)$ \\
+\addlinespace
+Any layer, \newline in-domain task &
+  Any & Low &
+  MAP \newline (large $\kappa$) & Pretrained directions encode strong
+    inductive biases; tight vMF prior prevents unnecessary drift \\
+\addlinespace
+Any layer, \newline domain-shift task &
+  Low--med. & High &
+  DoRA \newline (small $\kappa$) & Novel orthogonal directions required;
+    column-wise flexibility with diffuse prior allows free rotation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Connection to task structure.}
+The layer-type patterns in Table~\ref{tab:guidance} align with
+empirically observed task-specific fine-tuning dynamics.
+Prior work has shown that in-domain fine-tuning tends to produce small,
+globally coherent weight updates, while domain-shift tasks produce more
+heterogeneous changes concentrated in specific sublayers and weight
+subspaces~\cite{vu2020exploring,yang2024unveiling}.
+The table synthesizes these two orthogonal axes---task proximity and
+layer type---into a joint criterion that practitioners can evaluate
+with a short diagnostic run.
+
+\subsection{Calibrating the Concentration Parameter $\kappa$}
+\label{sec:disc_kappa}
+
+The concentration $\kappa$ of the vMF prior has a clear interpretation:
+it encodes the practitioner's confidence that the pretrained directions
+are meaningful for the target task.
+Formally, from~\eqref{eq:obj_dora}, the directional penalty is
+$\kappa A_d(\kappa)(1 - \cos\theta_j)$, which scales with $\kappa$ and
+thus controls how strongly the learned directions are regularized toward
+the pretrained directions.
+
+\begin{itemize}
+  \item \textbf{Large $\kappa$ (high confidence in pretrained directions).}
+    Appropriate when the fine-tuning task is closely related to the
+    pretraining distribution---for example, adapting a language model
+    pretrained on Wikipedia to a GLUE benchmark task.
+    In this regime, the pretrained directions encode strong inductive
+    biases~\cite{vu2020exploring}, and large $\kappa$ prevents the adapter
+    from drifting away needlessly.
+    The regularization is analogous to the strong cosine similarity
+    encouragement used in the original DoRA formulation~\cite{liu2024dora}.
+
+  \item \textbf{Small $\kappa$ (diffuse prior, large domain shift).}
+    Appropriate when the target task differs substantially from
+    pretraining---for example, instruction-tuning a base language model
+    or adapting to a specialized domain such as code or biomedicine.
+    Here, a small $\kappa$ allows the adapter to rotate freely, reducing
+    the regularization bias at the cost of a potentially looser bound.
+    This is consistent with observations that domain-shift fine-tuning
+    requires larger weight changes~\cite{tanwar2025domain} and that
+    applying strong proximity constraints to pretrained weights can
+    hurt performance on out-of-domain tasks.
+
+  \item \textbf{$\kappa$ as a hyperparameter.}
+    In practice, $\kappa$ can be selected via a validation-set sweep.
+    The PAC-Bayes bound provides a computable oracle: the value of
+    $\kappa$ that minimizes the right-hand side of
+    Theorem~\ref{thm:pac_dora} (or~\ref{thm:pac_map}) on a held-out set
+    is the theoretically optimal choice.
+    This gives a principled alternative to tuning $\kappa$ by grid search.
+\end{itemize}
+
+\paragraph{Relationship to $\kappa$ and SAM.}
+There is a suggestive connection between our directional regularizer and
+Sharpness-Aware Minimization (SAM)~\cite{bahri2022sharpness,foret2021sam}.
+SAM penalizes parameter perturbations in a Euclidean ball of radius $\rho$,
+seeking flat minima in the weight space.
+The vMF prior with large $\kappa$ similarly penalizes large angular
+deviations from the pretrained initialization, but does so
+\emph{geometrically on the hypersphere} rather than in the ambient
+Euclidean space.
+This means our regularizer is rotation-invariant with respect to
+rescaling of the weight vector---a property absent from SAM's Euclidean
+ball constraint.
+Formalizing this connection and understanding whether angular flatness
+implies Euclidean flatness (or vice versa) is a promising direction for
+future work.
+
+\subsection{Limitations and Extensions}
+\label{sec:disc_limitations}
+
+\paragraph{Mean-field assumption (A1).}
+Our KL decomposition in~\eqref{eq:kl_decomp} relies on the product
+structure $Q = \prod_j Q_j$, which ignores correlations between columns.
+In practice, the columns of a weight matrix interact through the forward
+pass and are updated jointly by a shared optimizer.
+Relaxing this assumption would require a full matrix-variate distribution
+on the joint $(u_1, \ldots, u_d)$, for which closed-form KL computations
+are substantially harder.
+A tractable middle ground is a \emph{block-diagonal} posterior that
+clusters correlated columns together; we leave this to future work.
+
+\paragraph{Equal-concentration assumption (A4).}
+Fixing $\kappa$ to be the same for all columns simplifies the KL but
+ignores the empirically observed heterogeneity of fine-tuning dynamics
+across layers and weight types~\cite{zhang2023adalora}.
+Extending to per-column concentrations $\kappa_j$ is straightforward
+using Appendix~\ref{app:unequal_kappa}: the KL becomes
+$\sum_j \KL(\vMF(\hat{\mu}_j, \kappa_{Q,j}) \| \vMF(\mu_{0,j},
+\kappa_{P,j}))$, where each term has the form given in
+Appendix~\ref{app:unequal_kappa}.
+Learning $\kappa_j$ via PAC-Bayes optimization would allow the prior
+to automatically allocate directional complexity budget across columns,
+analogous to how AdaLoRA allocates rank budget~\cite{zhang2023adalora}.
+
+\paragraph{Non-vacuous numerical bounds.}
+A practical limitation shared with most PAC-Bayes analyses is that the
+bounds as stated may be numerically vacuous (i.e., greater than 1) for
+large models.
+Computing non-vacuous bounds requires careful estimation of the partition
+function $Z_\lambda$ in~\eqref{eq:gibbs} via Monte Carlo, as demonstrated
+for image classifiers in~\cite{dziugaite2017computing}.
+Extending such computations to PEFT at scale is a concrete open problem.
+
+\paragraph{Extension to multi-layer interactions.}
+Our analysis treats each weight matrix independently.
+In deep networks, the composition of layer-wise updates introduces
+additional generalization complexity not captured by per-layer bounds.
+Compositional PAC-Bayes bounds~\cite{dziugaite2017computing} could
+potentially be applied, but the hyperspherical geometry makes this
+non-trivial.
+
+% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We developed a PAC-Bayesian framework for weight-decomposed parameter-efficient
+fine-tuning, giving the first principled comparison between column-wise
+(DoRA) and global (MAP) adaptation from a generalization perspective.
+Our main theoretical result---the Angular Complexity Comparison
+(Theorem~\ref{thm:comparison}) and the DoRA Advantage theorem
+(Theorem~\ref{thm:dora_advantage})---shows that the two methods occupy
+complementary regimes: DoRA excels at sparse, localized updates while
+MAP is preferred for globally aligned transformations.
+The Gibbs posterior derivation (Section~\ref{sec:gibbs}) provides a
+principled justification for cosine regularization and weight decay in
+PEFT, and the non-asymptotic vMF KL bounds make the theory valid beyond
+the high-concentration limit.
+
+%% [EDITORIAL]: Add 1--2 sentences on future directions:
+%% (1) Extending to heterogeneous concentration parameters $\kappa_j$
+%%     per layer or per column.
+%% (2) Non-vacuous numerical bound computation via the PAC-Bayes--Catoni
+%%     objective and Monte Carlo estimation of $Z_\lambda$.
+%% (3) Connecting the angular complexity measure to sharpness-aware
+%%     minimization (SAM) and flat-minima perspectives.
+
+% ============================================================
+\begin{thebibliography}{99}
+\bibitem{liu2024dora}
+S.-Y.\ Liu, C.-Y.\ Wang, H.\ Yin, P.\ Molchanov, Y.-C.\ F.\ Wang,
+K.-T.\ Cheng, and M.-H.\ Chen,
+``DoRA: Weight-Decomposed Low-Rank Adaptation,''
+\textit{arXiv:2402.09353}, 2024.
+
+\bibitem{si2025map}
+C.\ Si, Z.\ Shi, Y.\ Wang, X.\ Yang, S.\ Rahardja, and W.\ Shen,
+``MAP: Revisiting Weight Decomposition for Low-Rank Adaptation,''
+\textit{arXiv:2505.23094}, 2025.
+
+\bibitem{hu2021lora}
+E.\ J.\ Hu, Y.\ Shen, P.\ Wallis, Z.\ Allen-Zhu, Y.\ Li, S.\ Wang,
+L.\ Wang, and W.\ Chen,
+``LoRA: Low-Rank Adaptation of Large Language Models,''
+\textit{arXiv:2106.09685}, 2021.
+
+\bibitem{mcallester1999pac}
+D.\ A.\ McAllester,
+``Some PAC-Bayesian Theorems,''
+\textit{Mach.\ Learn.}, 37(3):355--363, 1999.
+
+\bibitem{catoni2007pac}
+O.\ Catoni,
+\textit{PAC-Bayesian Supervised Classification}.
+IMS Lecture Notes, 2007.
+
+\bibitem{liu2023pactuning}
+Y.\ Liu et al.,
+``PAC-tuning: Fine-tuning Pretrained Language Models with PAC-Bayes,''
+\textit{arXiv:2310.17588}, 2023.
+
+\bibitem{song2024sparse}
+W.\ Song, Z.\ Li, L.\ Zhang, H.\ Zhao, and B.\ Du,
+``Sparse is Enough in Fine-tuning Pre-trained Large Language Models,''
+\textit{Proceedings of the 41st International Conference on Machine Learning
+  (ICML 2024 Spotlight)}, 2024.
+arXiv:2312.11875.
+
+\bibitem{takatsu2022vmf}
+A.\ Takatsu,
+``The $f$-divergence of a von Mises-Fisher Distribution from Another,''
+\textit{arXiv:2202.05192}, 2022.
+
+\bibitem{zhang2023adalora}
+Q.\ Zhang, M.\ Chen, A.\ Bukharin, N.\ Karampatziakis, P.\ He,
+Y.\ Cheng, W.\ Chen, and T.\ Zhao,
+``AdaLoRA: Adaptive Budget Allocation for Parameter-Efficient Fine-Tuning,''
+\textit{11th International Conference on Learning Representations (ICLR)},
+2023. arXiv:2303.10512.
+
+\bibitem{foret2021sam}
+P.\ Foret, A.\ Kleiner, H.\ Mobahi, and B.\ Neyshabur,
+``Sharpness-Aware Minimization for Efficiently Improving Generalization,''
+\textit{9th International Conference on Learning Representations (ICLR)},
+2021. arXiv:2010.01412.
+
+\bibitem{bahri2022sharpness}
+D.\ Bahri, H.\ Mobahi, and Y.\ Tay,
+``Sharpness-Aware Minimization Improves Language Model Generalization,''
+\textit{Proceedings of the 60th Annual Meeting of the Association for
+  Computational Linguistics (ACL)}, pages 7360--7371, 2022.
+DOI:~10.18653/v1/2022.acl-long.508.
+
+\bibitem{vu2020exploring}
+T.\ Vu, T.\ Wang, T.\ Munkhdalai, A.\ Sordoni, A.\ Trischler,
+A.\ Mattarella-Micke, S.\ Maji, and M.\ Iyyer,
+``Exploring and Predicting Transferability across NLP Tasks,''
+\textit{Proceedings of the 2020 Conference on Empirical Methods in Natural
+  Language Processing (EMNLP)}, 2020.
+\url{https://aclanthology.org/2020.emnlp-main.635}.
+
+\bibitem{yang2024unveiling}
+H.\ Yang, Y.\ Zhang, J.\ Xu, H.\ Lu, P.\,A.\ Heng, and W.\ Lam,
+``Unveiling the Generalization Power of Fine-Tuned Large Language Models,''
+\textit{Proceedings of the 2024 Conference of the North American Chapter of the
+  Association for Computational Linguistics (NAACL)}, 2024.
+arXiv:2403.09162.
+
+\bibitem{tanwar2025domain}
+E.\ Tanwar, D.\ Nathani, W.\,Y.\ Wang, and T.\ Chakraborty,
+``Understanding the Effects of Domain Finetuning on LLMs,''
+\textit{arXiv:2510.09359} [cs.CL], 2025. (Preprint, not peer-reviewed.)
+
+\bibitem{dziugaite2017computing}
+G.\ K.\ Dziugaite and D.\ M.\ Roy,
+``Computing Nonvacuous Generalization Bounds for Deep (Stochastic) Neural
+Networks with Many More Parameters than Training Data,''
+\textit{Proceedings of the 33rd Conference on Uncertainty in Artificial
+  Intelligence (UAI)}, 2017. arXiv:1703.11008.
+
+\bibitem{liu2019roberta}
+Y.\ Liu, M.\ Ott, N.\ Goyal, J.\ Du, M.\ Joshi, D.\ Chen, O.\ Levy,
+M.\ Lewis, L.\ Zettlemoyer, and V.\ Stoyanov,
+``RoBERTa: A Robustly Optimized BERT Pretraining Approach,''
+\textit{arXiv:1907.11692}, 2019.
+
+\bibitem{touvron2023llama}
+H.\ Touvron, L.\ Martin, K.\ Stone, P.\ Albert, A.\ Almahairi, Y.\ Babaei,
+N.\ Bashlykov, et~al.,
+``Llama 2: Open Foundation and Fine-Tuned Chat Models,''
+\textit{arXiv:2307.09288}, 2023.
+
+\bibitem{alpaca2023}
+R.\ Taori, I.\ Gulrajani, T.\ Zhang, Y.\ Dubois, X.\ Li, C.\ Guestrin,
+P.\ Liang, and T.\ B.\ Hashimoto,
+``Stanford Alpaca: An Instruction-Following LLaMA Model,''
+\textit{GitHub repository}, 2023.
+\url{https://github.com/tatsu-lab/stanford_alpaca}.
+
+\end{thebibliography}
+
+\end{document}

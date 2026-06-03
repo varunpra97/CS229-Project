@@ -41,6 +41,13 @@ wandb/
 results/runs/
 results/runs_smoke/
 
+# QQP+MRPC (Machine B) sweep: ignore the heavy per-run pickles and the verbose
+# training logs (36 MB of per-step loss spam), but keep the curated
+# README/reports/aggregates tracked.
+results/qqp_mrpc/runs_*/
+results/qqp_mrpc/smoke/
+results/qqp_mrpc/logs/
+
 # Local watcher state + laptop-side working copies of sweep outputs
 gcp-results/
 gcp/.watch_*.sh

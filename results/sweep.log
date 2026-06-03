@@ -1,0 +1,44 @@
+[exp] device=mps (Apple MPS) | fp16=False | 1 tasks x 3 methods x 1 seeds = 3 runs
+[exp] tasks=['mrpc'] methods=['lora', 'dora', 'map'] seeds=[0] epochs=1.0 batch=32 max_train=200
+Downloading data:   0%|          | 0.00/649k [00:00<?, ?B/s]Downloading data: 100%|██████████| 649k/649k [00:00<00:00, 3.61MB/s]Downloading data: 100%|██████████| 649k/649k [00:00<00:00, 3.60MB/s]
+Downloading data:   0%|          | 0.00/75.7k [00:00<?, ?B/s]Downloading data: 100%|██████████| 75.7k/75.7k [00:00<00:00, 759kB/s]
+Downloading data:   0%|          | 0.00/308k [00:00<?, ?B/s]Downloading data: 100%|██████████| 308k/308k [00:00<00:00, 2.69MB/s]Downloading data: 100%|██████████| 308k/308k [00:00<00:00, 2.67MB/s]
+Generating train split:   0%|          | 0/3668 [00:00<?, ? examples/s]Generating train split: 100%|██████████| 3668/3668 [00:00<00:00, 135276.34 examples/s]
+Generating validation split:   0%|          | 0/408 [00:00<?, ? examples/s]Generating validation split: 100%|██████████| 408/408 [00:00<00:00, 154071.85 examples/s]
+Generating test split:   0%|          | 0/1725 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 1725/1725 [00:00<00:00, 586556.50 examples/s]
+Map:   0%|          | 0/3668 [00:00<?, ? examples/s]Map:  27%|██▋       | 1000/3668 [00:00<00:00, 7351.26 examples/s]Map:  55%|█████▍    | 2000/3668 [00:00<00:00, 8181.31 examples/s]Map:  82%|████████▏ | 3000/3668 [00:00<00:00, 8609.01 examples/s]Map: 100%|██████████| 3668/3668 [00:00<00:00, 8444.07 examples/s]
+Map:   0%|          | 0/408 [00:00<?, ? examples/s]Map: 100%|██████████| 408/408 [00:00<00:00, 8499.69 examples/s]
+Map:   0%|          | 0/1725 [00:00<?, ? examples/s]Map:  58%|█████▊    | 1000/1725 [00:00<00:00, 9262.10 examples/s]Map: 100%|██████████| 1725/1725 [00:00<00:00, 9252.46 examples/s]
+Some weights of RobertaForSequenceClassification were not initialized from the model checkpoint at roberta-base and are newly initialized: ['classifier.dense.bias', 'classifier.dense.weight', 'classifier.out_proj.bias', 'classifier.out_proj.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+
+[exp] === task=mrpc | train=200 eval=408 num_labels=2 ===
+[exp] [1/3] mrpc/lora/seed0: training ...
+  0%|          | 0/7 [00:00<?, ?it/s] 14%|█▍        | 1/7 [00:08<00:49,  8.18s/it] 29%|██▊       | 2/7 [00:10<00:22,  4.45s/it] 43%|████▎     | 3/7 [00:11<00:11,  2.91s/it] 57%|█████▋    | 4/7 [00:12<00:06,  2.18s/it] 71%|███████▏  | 5/7 [00:16<00:06,  3.05s/it] 86%|████████▌ | 6/7 [00:18<00:02,  2.48s/it]100%|██████████| 7/7 [00:29<00:00,  5.39s/it]                                             100%|██████████| 7/7 [00:29<00:00,  5.39s/it]100%|██████████| 7/7 [00:29<00:00,  4.22s/it]
+{'train_runtime': 29.5028, 'train_samples_per_second': 6.779, 'train_steps_per_second': 0.237, 'train_loss': 0.647625310080392, 'epoch': 1.0}
+  0%|          | 0/7 [00:00<?, ?it/s] 29%|██▊       | 2/7 [00:00<00:02,  2.44it/s] 43%|████▎     | 3/7 [00:01<00:02,  1.80it/s] 57%|█████▋    | 4/7 [00:02<00:01,  1.63it/s] 71%|███████▏  | 5/7 [00:03<00:01,  1.52it/s] 86%|████████▌ | 6/7 [00:03<00:00,  1.51it/s]100%|██████████| 7/7 [00:14<00:00,  3.85s/it]100%|██████████| 7/7 [00:14<00:00,  2.04s/it]
+Some weights of RobertaForSequenceClassification were not initialized from the model checkpoint at roberta-base and are newly initialized: ['classifier.dense.bias', 'classifier.dense.weight', 'classifier.out_proj.bias', 'classifier.out_proj.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+[exp] [1/3] mrpc/lora/seed0: acc=0.6838 trainable=1,919,234 -> results/runs_smoke/mrpc_lora_seed0.pkl
+[exp] [2/3] mrpc/dora/seed0: training ...
+  0%|          | 0/7 [00:00<?, ?it/s] 14%|█▍        | 1/7 [00:08<00:53,  8.91s/it] 29%|██▊       | 2/7 [00:11<00:25,  5.03s/it] 43%|████▎     | 3/7 [00:12<00:14,  3.52s/it] 57%|█████▋    | 4/7 [00:14<00:08,  2.78s/it] 71%|███████▏  | 5/7 [00:35<00:18,  9.16s/it] 86%|████████▌ | 6/7 [00:42<00:08,  8.57s/it]100%|██████████| 7/7 [01:01<00:00, 12.00s/it]                                             100%|██████████| 7/7 [01:01<00:00, 12.00s/it]100%|██████████| 7/7 [01:01<00:00,  8.80s/it]
+{'train_runtime': 61.5682, 'train_samples_per_second': 3.248, 'train_steps_per_second': 0.114, 'train_loss': 0.6476682935442243, 'epoch': 1.0}
+  0%|          | 0/7 [00:00<?, ?it/s] 29%|██▊       | 2/7 [00:01<00:03,  1.57it/s] 43%|████▎     | 3/7 [00:02<00:03,  1.11it/s] 57%|█████▋    | 4/7 [00:03<00:03,  1.02s/it] 71%|███████▏  | 5/7 [00:04<00:02,  1.07s/it] 86%|████████▌ | 6/7 [00:06<00:01,  1.10s/it]100%|██████████| 7/7 [00:16<00:00,  4.23s/it]100%|██████████| 7/7 [00:17<00:00,  2.44s/it]
+Some weights of RobertaForSequenceClassification were not initialized from the model checkpoint at roberta-base and are newly initialized: ['classifier.dense.bias', 'classifier.dense.weight', 'classifier.out_proj.bias', 'classifier.out_proj.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+[exp] [2/3] mrpc/dora/seed0: acc=0.6838 trainable=2,002,178 -> results/runs_smoke/mrpc_dora_seed0.pkl
+[exp] [3/3] mrpc/map/seed0: training ...
+  0%|          | 0/7 [00:00<?, ?it/s] 14%|█▍        | 1/7 [00:09<00:54,  9.16s/it] 29%|██▊       | 2/7 [00:10<00:22,  4.42s/it] 43%|████▎     | 3/7 [00:11<00:11,  2.86s/it] 57%|█████▋    | 4/7 [00:12<00:06,  2.13s/it] 71%|███████▏  | 5/7 [00:13<00:03,  1.77s/it] 86%|████████▌ | 6/7 [00:14<00:01,  1.49s/it]100%|██████████| 7/7 [00:24<00:00,  4.45s/it]                                             100%|██████████| 7/7 [00:24<00:00,  4.45s/it]100%|██████████| 7/7 [00:24<00:00,  3.56s/it]
+{'train_runtime': 24.915, 'train_samples_per_second': 8.027, 'train_steps_per_second': 0.281, 'train_loss': 0.6502088138035366, 'epoch': 1.0}
+  0%|          | 0/7 [00:00<?, ?it/s] 29%|██▊       | 2/7 [00:00<00:01,  3.51it/s] 43%|████▎     | 3/7 [00:01<00:01,  2.53it/s] 57%|█████▋    | 4/7 [00:01<00:01,  2.17it/s] 71%|███████▏  | 5/7 [00:02<00:00,  2.11it/s] 86%|████████▌ | 6/7 [00:02<00:00,  2.03it/s]100%|██████████| 7/7 [00:13<00:00,  3.65s/it]100%|██████████| 7/7 [00:13<00:00,  1.86s/it]
+[exp] [3/3] mrpc/map/seed0: acc=0.6838 trainable=1,919,378 -> results/runs_smoke/mrpc_map_seed0.pkl
+
+[exp] sweep complete: 3 runs in results/runs_smoke
+[exp] next: python scripts/aggregate.py
+Traceback (most recent call last):
+  File "/Users/soham/Documents/code/workspace/CS229-Project/scripts/report_task.py", line 26, in <module>
+    import make_report as MR  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/soham/Documents/code/workspace/CS229-Project/scripts/make_report.py", line 17, in <module>
+    import matplotlib
+ModuleNotFoundError: No module named 'matplotlib'

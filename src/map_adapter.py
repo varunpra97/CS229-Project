@@ -83,6 +83,80 @@ class MAPLinear(nn.Module):
         return f"d_out={self.d_out}, d_in={self.d_in}, rank={self.r} (MAP)"
 
 
+class MAPLinearGeo(nn.Module):
+    """Theory-faithful MAP in (magnitude, angle) polar coordinates.
+
+    Same effective-weight family as MAPLinear -- the 2D plane spanned by the
+    frozen pretrained direction w0_hat and a learnable perturbation direction --
+    but written as the paper's Section 3.4 decomposition  Theta = rho * U  directly:
+
+        W' = rho * ( cos(phi) * w0_hat + sin(phi) * dw_perp_hat ),
+
+    where  rho >= 0   is the magnitude (exactly ||W'||, the paper's rho),
+           phi        is the GLOBAL rotation angle Theta_global from the pretrained
+                      direction (cos(angle(W', W0)) == cos(phi) exactly, since
+                      dw_perp_hat is orthogonal to w0_hat), and
+           dw_perp_hat is the unit perturbation direction, low-rank dW = B@A with
+                      its w0_hat-component projected out.
+
+    This is NOT a different method: (rho, phi) <-> (alpha, beta) is just a polar
+    <-> Cartesian change of coordinates over the same plane, so expressivity and
+    trainable-param count are identical to MAPLinear. The only difference is that
+    phi is a *direct* parameter, so d(angle)/d(phi) = 1 instead of being throttled
+    by 1/||W0|| as d(Theta)/d(beta) is in MAPLinear near beta=0. That throttling is
+    why MAPLinear cannot rotate under a small step budget (e.g. MRPC, 174 steps)
+    and collapses to the majority-class baseline, while this variant adapts.
+    At init phi=0, rho=||W0||, so W' = W0 exactly (starts from the pretrained model).
+    """
+
+    def __init__(self, linear: nn.Linear, rank: int = 8):
+        super().__init__()
+        d_out, d_in = linear.weight.shape
+        self.d_out, self.d_in, self.r = d_out, d_in, rank
+
+        self.register_buffer("W0", linear.weight.detach().clone())
+        if linear.bias is not None:
+            self.register_buffer("bias", linear.bias.detach().clone())
+        else:
+            self.bias = None
+
+        w0_norm = self.W0.norm()
+        self.register_buffer("w0_hat", (self.W0 / (w0_norm + 1e-12)))
+
+        # Low-rank perturbation factors (same count as LoRA / MAPLinear).
+        self.A = nn.Parameter(torch.empty(rank, d_in))
+        self.B = nn.Parameter(torch.empty(d_out, rank))
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
+        nn.init.normal_(self.B, std=1.0 / rank)
+
+        # Polar parameters: magnitude rho (= ||W0|| at init) and global angle phi (= 0).
+        self.rho = nn.Parameter(w0_norm.clone().float())
+        self.phi = nn.Parameter(torch.zeros(()))
+
+    def effective_weight(self) -> torch.Tensor:
+        """Return W' = rho * (cos phi * w0_hat + sin phi * dw_perp_hat)."""
+        dW = self.B @ self.A
+        # Project the perturbation onto the complement of the frozen pretrained
+        # direction (Frobenius inner product == flattened-vector dot product), so
+        # the rotation angle phi is exactly the global angle to W0.
+        proj = (dW * self.w0_hat).sum() * self.w0_hat
+        dw_perp = dW - proj
+        dw_perp_hat = dw_perp / (dw_perp.norm() + 1e-12)
+        return self.rho * (torch.cos(self.phi) * self.w0_hat
+                           + torch.sin(self.phi) * dw_perp_hat)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.linear(x, self.effective_weight(), self.bias)
+
+    def extra_repr(self) -> str:
+        return f"d_out={self.d_out}, d_in={self.d_in}, rank={self.r} (MAP-geo)"
+
+
+# Both MAP variants share the same analysis path (global angle + per-column angles
+# are read off the resulting effective weight, regardless of parametrization).
+_MAP_CLASSES = (MAPLinear, MAPLinearGeo)
+
+
 def _is_target(name: str) -> bool:
     """Suffix match, identical to what peft targets for LoRA/DoRA.
 
@@ -106,12 +180,15 @@ def _set_submodule(root: nn.Module, qualified_name: str, new_module: nn.Module) 
         setattr(parent, last, new_module)
 
 
-def build_map_model(model_name: str, num_labels: int, rank: int = 8):
-    """Load the base model, freeze it, and swap target Linears for MAPLinear.
+def build_map_model(model_name: str, num_labels: int, rank: int = 8, geo: bool = False):
+    """Load the base model, freeze it, and swap target Linears for a MAP adapter.
 
-    The classification head is left trainable (mirroring peft's SEQ_CLS, which
-    trains modules_to_save), so the head can adapt alongside the MAP directions.
-    Returns the model with only MAP factors + scalars + classifier trainable.
+    `geo=False` uses the original Cartesian MAPLinear (paper Section 2.1, w'=a*w0+b*dw);
+    `geo=True` uses the polar MAPLinearGeo (paper Section 3.4, Theta=rho*U). Both are
+    the same family of effective weights with the same trainable-param count; see the
+    MAPLinearGeo docstring. The classification head is left trainable (mirroring peft's
+    SEQ_CLS, which trains modules_to_save), so the head can adapt alongside the MAP
+    directions. Returns the model with only MAP factors + scalars + classifier trainable.
     """
     from transformers import AutoModelForSequenceClassification
 
@@ -121,6 +198,7 @@ def build_map_model(model_name: str, num_labels: int, rank: int = 8):
     for p in model.parameters():
         p.requires_grad_(False)
 
+    cls = MAPLinearGeo if geo else MAPLinear
     # Collect target Linear modules first (can't mutate while iterating).
     targets = [
         (name, mod)
@@ -128,7 +206,7 @@ def build_map_model(model_name: str, num_labels: int, rank: int = 8):
         if isinstance(mod, nn.Linear) and _is_target(name)
     ]
     for name, lin in targets:
-        _set_submodule(model, name, MAPLinear(lin, rank=rank))
+        _set_submodule(model, name, cls(lin, rank=rank))
 
     # Keep the classification head trainable.
     if hasattr(model, "classifier"):
@@ -139,10 +217,11 @@ def build_map_model(model_name: str, num_labels: int, rank: int = 8):
 
 
 def map_layer_weights(model) -> dict[str, tuple]:
-    """Return {layer_name: (W0, W_final)} numpy arrays for every MAPLinear."""
+    """Return {layer_name: (W0, W_final)} numpy arrays for every MAP adapter
+    (either parametrization)."""
     out = {}
     for name, mod in model.named_modules():
-        if isinstance(mod, MAPLinear):
+        if isinstance(mod, _MAP_CLASSES):
             W0 = mod.W0.detach().cpu().numpy().copy()
             Wf = mod.effective_weight().detach().cpu().numpy().copy()
             out[name] = (W0, Wf)

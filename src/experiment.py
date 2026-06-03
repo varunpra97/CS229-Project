@@ -48,7 +48,11 @@ from .run import snapshot_base_weights, merged_weights, align_names
 from .angles import column_angles, global_angle
 
 ALL_TASKS = ["sst2", "mrpc", "rte", "qnli", "qqp", "mnli"]
-ALL_METHODS = ["lora", "dora", "map"]
+# "map" = original Cartesian MAP (paper Section 2.1); "map_geo" = theory-faithful
+# polar reparam (paper Section 3.4) that adapts under a small step budget. Both kept
+# so the original results stand and the before/after is reportable.
+ALL_METHODS = ["lora", "dora", "map", "map_geo"]
+MAP_METHODS = ("map", "map_geo")
 
 # Fixed analysis/model hyperparameters (paper defaults).
 MODEL_NAME = "roberta-base"
@@ -79,7 +83,7 @@ def layer_type(name: str) -> str:
 
 def extract_layers(model, method: str) -> dict[str, tuple]:
     """Return {layer_name: (W0, W_final)} for the target modules of `model`."""
-    if method == "map":
+    if method in MAP_METHODS:
         return map_layer_weights(model)
     base = snapshot_base_weights(model)
     merged = merged_weights(model)
@@ -88,8 +92,9 @@ def extract_layers(model, method: str) -> dict[str, tuple]:
 
 
 def build(method: str, num_labels: int):
-    if method == "map":
-        return build_map_model(MODEL_NAME, num_labels, rank=RANK)
+    if method in MAP_METHODS:
+        return build_map_model(MODEL_NAME, num_labels, rank=RANK,
+                               geo=(method == "map_geo"))
     return build_model(MODEL_NAME, num_labels, method, RANK)
 
 
@@ -145,8 +150,15 @@ def train_one_run(task, method, seed, tok, train_ds, eval_ds, num_labels, args, 
     trainer.train()
     metrics = trainer.evaluate()
     acc = metrics.get("eval_accuracy", float("nan"))
+    # Empirical risk on the TRAIN set: P1 correlates complexity with the
+    # generalization gap "after controlling for training error", so we need R_hat.
+    train_metrics = trainer.evaluate(train_ds, metric_key_prefix="train")
+    train_acc = train_metrics.get("train_accuracy", float("nan"))
+    train_loss = train_metrics.get("train_loss", float("nan"))
     layers = analyze(model, method, args.kappa, args.tau)
     res = dict(task=task, method=method, seed=seed, accuracy=acc,
+               train_accuracy=train_acc, train_loss=train_loss,
+               n_train=len(train_ds),
                trainable_params=n_train, layers=layers,
                cfg=dict(model_name=MODEL_NAME, rank=RANK, epochs=args.epochs,
                         lr=LR, kappa=args.kappa, tau=args.tau,

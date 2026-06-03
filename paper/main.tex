@@ -127,6 +127,12 @@ so $\KL=\kappa A_d(\kappa)(\mu_1^\top\mu_1-\mu_1^\top\mu_0)=\kappa A_d(\kappa)(1
 \begin{lemma}[Bounds on $A_d$]\label{lem:adbounds}
 For all $\kappa>0,\,d\ge2$: $\ \kappa/(d+\kappa)\le A_d(\kappa)\le1.$
 \end{lemma}
+\begin{proof}
+The upper bound is immediate: $A_d(\kappa)=\E_{\vMF(\mu,\kappa)}[\mu^\top x]\le1$ as
+$\mu^\top x\le1$. The lower bound is the Amos Bessel-ratio inequality~\cite{amos}
+$\tfrac{I_{d/2}(\kappa)}{I_{d/2-1}(\kappa)}\ge\tfrac{\kappa}{d/2+\sqrt{d^2/4+\kappa^2}}\ge\tfrac{\kappa}{d+\kappa}$,
+the last step using $\sqrt{d^2/4+\kappa^2}\le d/2+\kappa$.
+\end{proof}
 
 \begin{theorem}[Non-asymptotic directional KL bracket]\label{thm:nonasym}
 Under the column-wise (DoRA) decomposition with per-column vMF priors of
@@ -209,11 +215,13 @@ and the following identity holds \emph{exactly}:
 \end{theorem}
 \begin{proof}
 $\cos\Thetaglob=\hat U^\top U=\frac1d\sum_j\hat u_j^\top u_j=\frac1d\sum_j\cos\theta_j$,
-which rearranges to \eqref{eq:identity}. For the inequality, $\cos$ is convex on
-$[0,\pi/2]$, so Jensen gives $\frac1d\sum_j\cos\theta_j\ge\cos(\frac1d\sum_j\theta_j)$;
-since $\arccos$ is decreasing, $\Thetaglob\le\frac1d\sum_j\theta_j=:\bar\theta$.
-Squaring and applying QM--AM $(\frac1d\sum\theta_j)^2\le\frac1d\sum\theta_j^2$ yields
-$\Thetaglob^2\le\bar\theta^2\le\frac1d\sum_j\theta_j^2$.
+which rearranges to \eqref{eq:identity}. For the inequality, set $c_j=\cos\theta_j$ and
+$h(c)=(\arccos c)^2$. Writing $\theta=\arccos c\in[0,\pi/2]$,
+$h''(c)=\frac{2}{\sin^2\theta}\,(1-\theta\cot\theta)\ge0$ since $\theta\le\tan\theta$ on
+$[0,\pi/2)$, so $h$ is convex on $[0,1]$. Jensen's inequality applied to $h$ then gives
+$\Thetaglob^2=h\!\big(\tfrac1d\sum_j c_j\big)\le\tfrac1d\sum_j h(c_j)=\tfrac1d\sum_j\theta_j^2$.
+(Note $\cos$ is \emph{concave} on $[0,\pi/2]$, so the inequality follows from convexity of
+$c\mapsto(\arccos c)^2$ rather than from Jensen on $\cos$ directly.)
 \end{proof}
 
 \begin{remark}[Sharp characterization]
@@ -235,11 +243,13 @@ heuristics used in PEFT.
 The theorems are proven; what is in question is whether the geometric quantities they
 rest on behave as claimed on real fine-tuned weights. We fine-tune RoBERTa-base
 (125M)~\cite{roberta} under LoRA, DoRA, and MAP (all rank $r{=}8$, matched
-parameter count, $\kappa{=}10$) on four GLUE tasks (SST-2, QNLI, MNLI, RTE; three
-seeds), and for each of the $72$ target weight matrices per run measure the per-column
+parameter count, $\kappa{=}10$) on six GLUE tasks---SST-2, QNLI, MNLI, RTE, and the two
+held-out tasks QQP and MRPC (three seeds)---and for each of the $72$ target weight
+matrices per run measure the per-column
 angles $\theta_j=\arccos\!\big(w_{0,j}^\top\hat w_j/(\|w_{0,j}\|\|\hat w_j\|)\big)$ and
 the global angle $\Thetaglob$ between pretrained $W_0$ and merged fine-tuned
-$\hat W=W_0+\Delta W$. Pooling gives $72\times36=2592$ measured layers. The directional
+$\hat W=W_0+\Delta W$. Pooling the four primary tasks gives $72\times36=2592$ measured
+layers; QQP and MRPC add $1296$ more. The directional
 complexity is then evaluated exactly as in the theory,
 $\widehat C^{\mathrm{DoRA}}_{\mathrm{dir}}=\kappa\,A_d(\kappa)\sum_j(1-\cos\theta_j)$,
 with $A_d(\kappa)=I_{d/2}(\kappa)/I_{d/2-1}(\kappa)$ computed via an Olver large-order
@@ -253,12 +263,13 @@ $d(1-\cos\Thetaglob)$ on $\sum_j(1-\cos\theta_j)$ across all $2592$ layers gives
 $0.889$ with $R^2=0.995$ (Pearson $r=0.997$); Fig.~\ref{fig:thm}(left). The
 near-perfect linearity confirms DoRA's local sum is the dimension-scaled counterpart
 of MAP's global angle; the slope's $11\%$ shortfall from $1$ is exactly the
-raw-vs-unit flattening offset, not a violation.
+raw-vs-unit flattening offset, not a violation. The two held-out tasks reproduce this
+on their $1296$ further layers (slope $0.866$, $R^2=0.995$, Pearson $r=0.998$).
 
 \paragraph{Theorem~\ref{thm:nonasym} (non-asymptotic KL bracket).}
 The bracket $\frac{\kappa^2}{d+\kappa}S\le\kappa A_d(\kappa)S\le\kappa S$
 ($S=\sum_j(1-\cos\theta_j)$) holds with \textbf{0 violations across all $2592$ layers}
-(Fig.~\ref{fig:thm}, right). The exact value sits at the lower end of the bracket
+(Fig.~\ref{fig:thm}, right; and $0/1296$ on the held-out QQP/MRPC layers). The exact value sits at the lower end of the bracket
 ($0.01\%$ of the way to the upper bound) because
 $A_{768}(10)=1.30\times10^{-2}$ and $A_{3072}(10)=3.26\times10^{-3}$. Equivalently, the
 asymptotic approximation overestimates the directional KL by
@@ -285,7 +296,8 @@ bound because $A_d(\kappa)\ll1$.}
 \caption{Measured directional complexity (summed over $72$ layers, mean over $3$
 seeds, $\kappa{=}10$), asymptotic vs.\ non-asymptotic. The $\sim$$10^3$ ratio
 $C^{\mathrm{DoRA}}/C^{\mathrm{MAP}}$ is the sum-vs-average gap of
-Theorem~\ref{thm:comparison}.}
+Theorem~\ref{thm:comparison}. QQP and MRPC (below the rule) are the two held-out
+tasks, reproducing the same $\sim$$10^3$ ratio.}
 \label{tab:cterms}
 \small
 \begin{tabular}{llcccc}
@@ -298,6 +310,12 @@ QNLI  & DoRA & 969.8  & 11.56 & 0.864 & 1122 \\
 MNLI  & LoRA & 3837.9 & 45.43 & 3.461 & 1109 \\
       & DoRA & 3902.9 & 46.30 & 3.528 & 1106 \\
 RTE   & DoRA & 17.0   & 0.20  & 0.017 & 1008 \\
+\midrule
+% --- QQP and MRPC: additional held-out tasks (Machine B); verify Thms 3.4 & 3.10 ---
+QQP   & LoRA & 2255.7 & 26.83 & 1.838 & 1227 \\
+      & DoRA & 2264.3 & 26.93 & 1.846 & 1227 \\
+MRPC  & LoRA & 16.8   & 0.20  & 0.017 & 1007 \\
+      & DoRA & 17.9   & 0.21  & 0.018 & 1010 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -331,6 +349,8 @@ Models,'' arXiv:2106.09685, 2021.
 \bibitem{mcallester} D.\ A.\ McAllester, ``Some PAC-Bayesian Theorems,'' \emph{Mach.
 Learn.}, 37(3):355--363, 1999.
 \bibitem{catoni} O.\ Catoni, \emph{PAC-Bayesian Supervised Classification}, IMS, 2007.
+\bibitem{amos} D.\ E.\ Amos, ``Computation of modified Bessel functions and their
+ratios,'' \emph{Math.\ Comp.}, 28(125):239--251, 1974.
 \bibitem{roberta} Y.\ Liu et al., ``RoBERTa: A Robustly Optimized BERT Pretraining
 Approach,'' arXiv:1907.11692, 2019.
 \end{thebibliography}
